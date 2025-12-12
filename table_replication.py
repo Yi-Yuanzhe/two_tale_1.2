@@ -62,6 +62,10 @@ def calculate_additional_variables(df):
     # Calculate position changes for Table II
     for ticker in df['Ticker'].unique():
         mask = df['Ticker'] == ticker
+
+        # OI_{t-1}
+        df.loc[mask, 'Open_Interest_Lag1'] = df.loc[mask, 'Open_Interest_All'].shift(1)
+
         # Delta positions (changes)
         df.loc[mask, 'Delta_NetLong_Comm'] = df.loc[mask, 'NetLong_Comm'].diff()
         df.loc[mask, 'Delta_NetLong_NonComm'] = df.loc[mask, 'NetLong_NonComm'].diff()
@@ -70,9 +74,11 @@ def calculate_additional_variables(df):
         df.loc[mask, 'NonReport_Short'] = df.loc[mask, 'Open_Interest_All'] - df.loc[mask, 'Comm_Positions_Short_All'] - df.loc[mask, 'NonComm_Positions_Short_All']
         df.loc[mask, 'NetLong_NonReport'] = df.loc[mask, 'NonReport_Long'] - df.loc[mask, 'NonReport_Short']
         df.loc[mask, 'Delta_NetLong_NonReport'] = df.loc[mask, 'NetLong_NonReport'].diff()
+        df.loc[mask, 'Q_NonReport'] = df.loc[mask, 'Delta_NetLong_NonReport'] / df.loc[mask, 'Open_Interest_Lag1'] * 100
         # Lag Q for Table II
         df.loc[mask, 'Q_Comm_lag1'] = df.loc[mask, 'Q_Comm'].shift(1)
         df.loc[mask, 'Q_NonComm_lag1'] = df.loc[mask, 'Q_NonComm'].shift(1)
+        df.loc[mask, 'Q_NonReport_lag1'] = df.loc[mask, 'Q_NonReport'].shift(1)
     print("✓ Calculated position changes")
     
     # Return lags for momentum analysis
@@ -100,7 +106,7 @@ def calculate_additional_variables(df):
         import yfinance as yf
         print("\nDownloading S&P 500 data for v_t calculation...")
         spx = yf.download('^GSPC', start='2000-01-01', end='2018-12-31', progress=False)
-        if not spx.empty:
+        if not spx is None and spx.empty:
             spx_weekly = spx['Close'].resample('W-TUE').last()
             spx_ret = spx_weekly.pct_change()
             spx_ret_series = spx_ret
@@ -174,11 +180,11 @@ def calculate_additional_variables(df):
         # Basis: simplified as return autocorrelation proxy (since we don't have multiple contract maturities)
         basis_raw = df.loc[mask, 'Ret'].rolling(4, min_periods=2).mean()
         # Apply log transformation to basis (handling negative values)
-        df.loc[mask, 'Basis'] = np.log(basis_raw + 1)
+        # df.loc[mask, 'Basis'] = np.log(basis_raw + 1)
         # S: sign variable for noncommercial net position
         df.loc[mask, 'S'] = np.where(df.loc[mask, 'NetLong_NonComm'] > 0, 1, -1)
         # S*v: signed idiosyncratic volatility
-        df.loc[mask, 'S_v'] = df.loc[mask, 'S'] * df.loc[mask, 'v_t']
+        # df.loc[mask, 'S_v'] = df.loc[mask, 'S'] * df.loc[mask, 'v_t']
     print("✓ Calculated Basis and S*v_t")
     
     # Load VIX
@@ -275,7 +281,9 @@ def fama_macbeth_regression(df, dependent_var, independent_vars, date_col='Repor
     """
     Perform Fama-MacBeth cross-sectional regression
     
-    Returns: DataFrame with coefficients, t-stats, and p-values
+    Returns:
+        - results_df: DataFrame with coefficients, t-stats, etc.
+        - avg_r2: The average R-squared across all cross-sectional regressions
     """
     # Prepare data
     df_clean = df[[date_col, 'Ticker', dependent_var] + independent_vars].dropna()
@@ -284,6 +292,7 @@ def fama_macbeth_regression(df, dependent_var, independent_vars, date_col='Repor
     dates = sorted(df_clean[date_col].unique())
     
     coeffs_list = []
+    r2_list = []
     
     for date in dates:
         # Cross-sectional slice
@@ -300,8 +309,13 @@ def fama_macbeth_regression(df, dependent_var, independent_vars, date_col='Repor
         try:
             model = sm.OLS(y, X).fit()
             coeffs_list.append(model.params)
+            r2_list.append(model.rsquared)
         except:
             continue
+
+    if not coeffs_list:
+        print(f"⚠ No valid cross-sectional regressions for {dependent_var} with {independent_vars}")
+        return pd.DataFrame(), 0.0
     
     # Convert to DataFrame
     coeffs_df = pd.DataFrame(coeffs_list)
@@ -316,69 +330,148 @@ def fama_macbeth_regression(df, dependent_var, independent_vars, date_col='Repor
     })
     
     results['p_value'] = 2 * (1 - stats.t.cdf(np.abs(results['t_stat']), len(coeffs_df) - 1))
+
+    avg_r2 = np.mean(r2_list)
     
-    return results
+    return results, avg_r2
 
 # ============================================================================
 # TABLE II: Weekly Position Changes and Returns
 # ============================================================================
+# def table_II_position_changes_returns(df):
+#     """Generate Table II: Weekly Position Changes and Returns
+#     Cross-sectional regressions with position changes as dependent variable
+#     - Regression 1-2: Commercial traders
+#     - Regression 3-4: Non-commercial traders
+#     - Regression 5-6: Non-reportable traders
+#     """
+#     print("\n" + "=" * 70)
+#     print("TABLE II: WEEKLY POSITION CHANGES AND RETURNS")
+#     print("=" * 70)
+    
+#     results = {}
+    
+#     # Regression 1: Q_Comm on Ret (contemporaneous)
+#     print("\nRegression 1: Q_Commercial ~ Ret_t")
+#     res1 = fama_macbeth_regression(df, 'Q_Comm', ['Ret'])
+#     print(res1.to_string(index=False))
+#     results['Reg1_Comm_Ret'] = res1
+    
+#     # Regression 2: Q_Comm on Ret_lag1 + Q_lag1
+#     print("\nRegression 2: Q_Commercial ~ Ret_{t-1} + Q_{t-1}")
+#     res2 = fama_macbeth_regression(df, 'Q_Comm', ['Ret_lag1', 'Q_Comm_lag1'])
+#     print(res2.to_string(index=False))
+#     results['Reg2_Comm_Lag'] = res2
+    
+#     # Regression 3: Q_NonComm on Ret (contemporaneous)
+#     print("\nRegression 3: Q_NonCommercial ~ Ret_t")
+#     res3 = fama_macbeth_regression(df, 'Q_NonComm', ['Ret'])
+#     print(res3.to_string(index=False))
+#     results['Reg3_NonComm_Ret'] = res3
+    
+#     # Regression 4: Q_NonComm on Ret_lag1 + Q_lag1
+#     print("\nRegression 4: Q_NonCommercial ~ Ret_{t-1} + Q_{t-1}")
+#     res4 = fama_macbeth_regression(df, 'Q_NonComm', ['Ret_lag1', 'Q_NonComm_lag1'])
+#     print(res4.to_string(index=False))
+#     results['Reg4_NonComm_Lag'] = res4
+    
+#     # Regression 5: Delta_NonReport on Ret (contemporaneous)
+#     print("\nRegression 5: Delta_NonReportable ~ Ret_t")
+#     res5 = fama_macbeth_regression(df, 'Delta_NetLong_NonReport', ['Ret'])
+#     print(res5.to_string(index=False))
+#     results['Reg5_NonReport_Ret'] = res5
+    
+#     # Regression 6: Delta_NonReport on Ret_lag1 (simplified, no Q for non-reportable)
+#     print("\nRegression 6: Delta_NonReportable ~ Ret_{t-1}")
+#     res6 = fama_macbeth_regression(df, 'Delta_NetLong_NonReport', ['Ret_lag1'])
+#     print(res6.to_string(index=False))
+#     results['Reg6_NonReport_Lag'] = res6
+    
+#     # Save
+#     with pd.ExcelWriter('output/tables/table_II_position_changes.xlsx') as writer:
+#         for name, res in results.items():
+#             res.to_excel(writer, sheet_name=name, index=False)
+    
+#     print("\n✓ Table II saved to output/tables/table_II_position_changes.xlsx")
+    
+#     return results
+
+def _format_coef_tstat(res_df, var_name):
+    """res_df: results DataFrame from fama_macbeth_regression"""
+    if var_name in res_df.index:
+        coef = res_df.loc[var_name, 'Coefficient']
+        tstat = res_df.loc[var_name, 't_stat']
+        return f"{coef:.2f}\n({tstat:.2f})"
+    return ""
+
 def table_II_position_changes_returns(df):
-    """Generate Table II: Weekly Position Changes and Returns
-    Cross-sectional regressions with position changes as dependent variable
-    - Regression 1-2: Commercial traders
-    - Regression 3-4: Non-commercial traders
-    - Regression 5-6: Non-reportable traders
+    """
+    Generate Table II: Weekly Position Changes and Contemporaneous and Lagged Returns
+    
+    Model 1: Q_{i,t} = a + b * Ret_{i,t}
+    Model 2: Q_{i,t} = a + b * Ret_{i,t-1} + c * Q_{i,t-1}
     """
     print("\n" + "=" * 70)
-    print("TABLE II: WEEKLY POSITION CHANGES AND RETURNS")
+    print("TABLE II: WEEKLY POSITION CHANGES AND RETURNS (REPLICATION)")
     print("=" * 70)
+
+    # Variable configurations for each trader type
+    trader_configs = {
+        'Commercials': {
+            'dep_var': 'Q_Comm', 
+            'lag_q_var': 'Q_Comm_lag1' 
+        },
+        'Noncommercials': {
+            'dep_var': 'Q_NonComm', 
+            'lag_q_var': 'Q_NonComm_lag1' 
+        },
+        'Nonreportables': {
+            'dep_var': 'Q_NonReport',
+            'lag_q_var': 'Q_NonReport_lag1'
+        }
+    }
+
+    summary_data = {}
+
+    for trader_name, config in trader_configs.items():
+        dep_var = config['dep_var']
+        lag_q_var = config['lag_q_var']
+        
+        print(f"\nProcessing {trader_name}...")
+
+        # Q_t ~ Ret_t
+        res1, r2_1 = fama_macbeth_regression(df, dep_var, ['Ret'])
+        
+        # Q_t ~ Ret_{t-1} + Q_{t-1}
+        res2, r2_2 = fama_macbeth_regression(df, dep_var, ['Ret_lag1', lag_q_var])
+
+        if res1.empty or res2.empty:
+            print(f"  ⚠ Skipping {trader_name} due to insufficient data.")
+            continue
+
+        col_data = {
+            'R_i,t': _format_coef_tstat(res1, 'Ret'),
+            'R_i,t-1': _format_coef_tstat(res2, 'Ret_lag1'),
+            'Q_i,t-1': _format_coef_tstat(res2, lag_q_var),
+            'R2 (Contemp)': f"{r2_1 * 100:.2f}%",
+            'R2 (Lagged)': f"{r2_2 * 100:.2f}%"
+        }
+        
+        summary_data[trader_name] = col_data
+
+    final_table = pd.DataFrame(summary_data)
     
-    results = {}
-    
-    # Regression 1: Q_Comm on Ret (contemporaneous)
-    print("\nRegression 1: Q_Commercial ~ Ret_t")
-    res1 = fama_macbeth_regression(df, 'Q_Comm', ['Ret'])
-    print(res1.to_string(index=False))
-    results['Reg1_Comm_Ret'] = res1
-    
-    # Regression 2: Q_Comm on Ret_lag1 + Q_lag1
-    print("\nRegression 2: Q_Commercial ~ Ret_{t-1} + Q_{t-1}")
-    res2 = fama_macbeth_regression(df, 'Q_Comm', ['Ret_lag1', 'Q_Comm_lag1'])
-    print(res2.to_string(index=False))
-    results['Reg2_Comm_Lag'] = res2
-    
-    # Regression 3: Q_NonComm on Ret (contemporaneous)
-    print("\nRegression 3: Q_NonCommercial ~ Ret_t")
-    res3 = fama_macbeth_regression(df, 'Q_NonComm', ['Ret'])
-    print(res3.to_string(index=False))
-    results['Reg3_NonComm_Ret'] = res3
-    
-    # Regression 4: Q_NonComm on Ret_lag1 + Q_lag1
-    print("\nRegression 4: Q_NonCommercial ~ Ret_{t-1} + Q_{t-1}")
-    res4 = fama_macbeth_regression(df, 'Q_NonComm', ['Ret_lag1', 'Q_NonComm_lag1'])
-    print(res4.to_string(index=False))
-    results['Reg4_NonComm_Lag'] = res4
-    
-    # Regression 5: Delta_NonReport on Ret (contemporaneous)
-    print("\nRegression 5: Delta_NonReportable ~ Ret_t")
-    res5 = fama_macbeth_regression(df, 'Delta_NetLong_NonReport', ['Ret'])
-    print(res5.to_string(index=False))
-    results['Reg5_NonReport_Ret'] = res5
-    
-    # Regression 6: Delta_NonReport on Ret_lag1 (simplified, no Q for non-reportable)
-    print("\nRegression 6: Delta_NonReportable ~ Ret_{t-1}")
-    res6 = fama_macbeth_regression(df, 'Delta_NetLong_NonReport', ['Ret_lag1'])
-    print(res6.to_string(index=False))
-    results['Reg6_NonReport_Lag'] = res6
-    
-    # Save
-    with pd.ExcelWriter('output/tables/table_II_position_changes.xlsx') as writer:
-        for name, res in results.items():
-            res.to_excel(writer, sheet_name=name, index=False)
-    
-    print("\n✓ Table II saved to output/tables/table_II_position_changes.xlsx")
-    
-    return results
+    row_order = ['R_i,t', 'R_i,t-1', 'Q_i,t-1', 'R2 (Contemp)', 'R2 (Lagged)']
+    final_table = final_table.reindex(row_order)
+
+    print("\nGenerated Table Structure:")
+    print(final_table)
+
+    output_path = 'output/tables/table_II_combined.xlsx'
+    final_table.to_excel(output_path)
+    print(f"\n✓ Table II saved to {output_path}")
+
+    return final_table
 
 # ============================================================================
 # TABLE III: Return Predictability
@@ -393,48 +486,81 @@ def table_III_return_predictability(df):
     print("=" * 70)
     
     results = {}
+
+    has_basis = 'Basis' in df.columns and not df['Basis'].isnull().all()
+
+    controls = ['Ret']
+    if 'S_v' in df.columns:
+        controls.append('S_v')
+    if has_basis:
+        controls.append('Basis')
+        print("✓ Including Basis in regression controls")
+    else:
+        print("⚠ Basis variable not found or all NaN; excluding from regression controls")
     
     # For j=1 (one week ahead)
     print("\n=== PREDICTIONS FOR R_{t+1} ===")
     
-    # Model 1: Commercial Q only
-    print("\nModel 1a: R_{t+1} ~ Q_Comm")
-    res1a = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm'])
+    # # Model 1: Commercial Q only
+    # print("\nModel 1a: R_{t+1} ~ Q_Comm")
+    # res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm'])
+    # print(res1a.to_string(index=False))
+    # results['R_t1_Q_Comm'] = res1a
+    
+    # # Model 2: Commercial Q with controls (Equation 5, with Basis)
+    # print("\nModel 1b: R_{t+1} ~ Q_Comm + Basis + S*v + Ret")
+    # res1b, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm', 'Basis', 'S_v', 'Ret'])
+    # print(res1b.to_string(index=False))
+    # results['R_t1_Q_Comm_Full'] = res1b
+    
+    # # Model 3: NonCommercial Q only
+    # print("\nModel 2a: R_{t+1} ~ Q_NonComm")
+    # res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm'])
+    # print(res2a.to_string(index=False))
+    # results['R_t1_Q_NonComm'] = res2a
+    
+    # # Model 4: NonCommercial Q with controls (Equation 5, with Basis)
+    # print("\nModel 2b: R_{t+1} ~ Q_NonComm + Basis + S*v + Ret")
+    # res2b, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm', 'Basis', 'S_v', 'Ret'])
+    # print(res2b.to_string(index=False))
+    # results['R_t1_Q_NonComm_Full'] = res2b
+    
+    # # For j=2 (two weeks ahead)
+    # print("\n=== PREDICTIONS FOR R_{t+2} ===")
+    
+    # # Model 5: Commercial Q with controls for R_{t+2} (with Basis)
+    # print("\nModel 3: R_{t+2} ~ Q_Comm + Basis + S*v + Ret")
+    # res3, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['Q_Comm', 'Basis', 'S_v', 'Ret'])
+    # print(res3.to_string(index=False))
+    # results['R_t2_Q_Comm_Full'] = res3
+    
+    # # Model 6: NonCommercial Q with controls for R_{t+2} (with Basis)
+    # print("\nModel 4: R_{t+2} ~ Q_NonComm + Basis + S*v + Ret")
+    # res4, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['Q_NonComm', 'Basis', 'S_v', 'Ret'])
+    # print(res4.to_string(index=False))
+    # results['R_t2_Q_NonComm_Full'] = res4
+
+    print("\n[Commercials] Univariate: R_{t+1} ~ Q_Comm")
+    res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm'])
     print(res1a.to_string(index=False))
     results['R_t1_Q_Comm'] = res1a
     
-    # Model 2: Commercial Q with controls (Equation 5, with Basis)
-    print("\nModel 1b: R_{t+1} ~ Q_Comm + Basis + S*v + Ret")
-    res1b = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm', 'Basis', 'S_v', 'Ret'])
+    print(f"\n[Commercials] Multivariate: R_{{t+1}} ~ Q_Comm + {' + '.join(controls)}")
+    cols = ['Q_Comm'] + controls
+    res1b, _ = fama_macbeth_regression(df, 'Ret_Lead', cols)
     print(res1b.to_string(index=False))
     results['R_t1_Q_Comm_Full'] = res1b
-    
-    # Model 3: NonCommercial Q only
-    print("\nModel 2a: R_{t+1} ~ Q_NonComm")
-    res2a = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm'])
+
+    print("\n[Non-Commercials] Univariate: R_{t+1} ~ Q_NonComm")
+    res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm'])
     print(res2a.to_string(index=False))
     results['R_t1_Q_NonComm'] = res2a
-    
-    # Model 4: NonCommercial Q with controls (Equation 5, with Basis)
-    print("\nModel 2b: R_{t+1} ~ Q_NonComm + Basis + S*v + Ret")
-    res2b = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm', 'Basis', 'S_v', 'Ret'])
+
+    print(f"\n[Non-Commercials] Multivariate: R_{{t+1}} ~ Q_NonComm + {' + '.join(controls)}")
+    cols = ['Q_NonComm'] + controls
+    res2b, _ = fama_macbeth_regression(df, 'Ret_Lead', cols)
     print(res2b.to_string(index=False))
     results['R_t1_Q_NonComm_Full'] = res2b
-    
-    # For j=2 (two weeks ahead)
-    print("\n=== PREDICTIONS FOR R_{t+2} ===")
-    
-    # Model 5: Commercial Q with controls for R_{t+2} (with Basis)
-    print("\nModel 3: R_{t+2} ~ Q_Comm + Basis + S*v + Ret")
-    res3 = fama_macbeth_regression(df, 'Ret_Lead2', ['Q_Comm', 'Basis', 'S_v', 'Ret'])
-    print(res3.to_string(index=False))
-    results['R_t2_Q_Comm_Full'] = res3
-    
-    # Model 6: NonCommercial Q with controls for R_{t+2} (with Basis)
-    print("\nModel 4: R_{t+2} ~ Q_NonComm + Basis + S*v + Ret")
-    res4 = fama_macbeth_regression(df, 'Ret_Lead2', ['Q_NonComm', 'Basis', 'S_v', 'Ret'])
-    print(res4.to_string(index=False))
-    results['R_t2_Q_NonComm_Full'] = res4
     
     # Save
     with pd.ExcelWriter('output/tables/table_III_return_predictability.xlsx') as writer:
@@ -446,21 +572,80 @@ def table_III_return_predictability(df):
     return results
 
 # ============================================================================
+# Helper function to load daily prices
+# ============================================================================
+def load_daily_prices():
+    """Load all daily price data for calculating daily returns"""
+    print("\nLoading daily price data...")
+    all_daily_data = {}
+    
+    files = glob.glob('data/prices/*_prices.csv')
+    for file in files:
+        ticker = os.path.basename(file).replace('_prices.csv', '')
+        try:
+            df_price = pd.read_csv(file)
+            # Skip header rows with ticker symbols
+            df_price = df_price[df_price['Date'].notna() & (df_price['Date'] != '')]
+            df_price['Date'] = pd.to_datetime(df_price['Date'])
+            df_price = df_price.sort_values('Date')
+            df_price['Close'] = pd.to_numeric(df_price['Close'], errors='coerce')
+            df_price = df_price[df_price['Close'].notna()]
+            all_daily_data[ticker] = df_price[['Date', 'Close']].set_index('Date')
+        except Exception as e:
+            print(f"  ⚠ Could not load {ticker}: {str(e)[:50]}")
+    
+    print(f"✓ Loaded daily prices for {len(all_daily_data)} commodities")
+    return all_daily_data
+
+def calculate_cumulative_returns(daily_prices, ticker, start_date, end_date):
+    """Calculate cumulative return from start_date to end_date for a ticker"""
+    if ticker not in daily_prices:
+        return np.nan
+    
+    price_data = daily_prices[ticker]
+    
+    # Get prices within date range
+    mask = (price_data.index >= start_date) & (price_data.index <= end_date)
+    prices = price_data.loc[mask, 'Close']
+    
+    if len(prices) < 2:
+        return np.nan
+    
+    # Cumulative return: (end_price - start_price) / start_price
+    cum_ret = (prices.iloc[-1] - prices.iloc[0]) / prices.iloc[0]
+    return cum_ret
+
+# ============================================================================
 # TABLE V: Portfolio Sorts
 # ============================================================================
 def table_V_portfolio_sorts(df):
-    """Generate Table V: Portfolio Sorts based on Q_Comm"""
+    """Generate Table V: Portfolio Sorts based on Q_Comm
+    Calculate returns over day ranges: [-10,0], [1,4], [5,10], [11,20], [21,40], [1,40]
+    """
     print("\n" + "=" * 70)
-    print("TABLE V: PORTFOLIO SORTS")
+    print("TABLE V: PORTFOLIO SORTS (DAILY RETURNS)")
     print("=" * 70)
+    
+    # Load daily price data
+    daily_prices = load_daily_prices()
+    
+    # Define periods as (start_day, end_day) relative to report date
+    periods = [
+        ('-10to0', -10, 0),
+        ('1to4', 1, 4),
+        ('5to10', 5, 10),
+        ('11to20', 11, 20),
+        ('21to40', 21, 40),
+        ('1to40', 1, 40)
+    ]
     
     # Get unique dates
     dates = sorted(df['Report_Date'].unique())
     
-    horizons = [1, 5, 10, 20, 40]  # weeks
-    results_dict = {h: [] for h in horizons}
+    # Store results for each period
+    results_dict = {period[0]: [] for period in periods}
     
-    for date_idx, date in enumerate(dates):
+    for date in dates:
         # Get current cross-section
         current = df[df['Report_Date'] == date].copy()
         
@@ -468,60 +653,70 @@ def table_V_portfolio_sorts(df):
             continue
         
         # Sort into quintiles based on Q_Comm
-        current['Quintile'] = pd.qcut(current['Q_Comm'], q=5, labels=[1, 2, 3, 4, 5], duplicates='drop')
+        try:
+            current['Quintile'] = pd.qcut(current['Q_Comm'], q=5, labels=[1, 2, 3, 4, 5], duplicates='drop')
+        except:
+            continue
         
-        # For each horizon, calculate forward returns
-        for horizon in horizons:
-            if date_idx + horizon >= len(dates):
+        # For each period, calculate returns
+        for period_name, start_day, end_day in periods:
+            # Calculate date range
+            start_date = date + pd.Timedelta(days=start_day)
+            end_date = date + pd.Timedelta(days=end_day)
+            
+            # Calculate returns for each ticker
+            returns_list = []
+            for _, row in current.iterrows():
+                ticker = row['Ticker']
+                quintile = row['Quintile']
+                
+                # Calculate cumulative return over the period
+                cum_ret = calculate_cumulative_returns(daily_prices, ticker, start_date, end_date)
+                
+                if not np.isnan(cum_ret):
+                    returns_list.append({'Quintile': quintile, 'Return': cum_ret})
+            
+            if len(returns_list) < 5:
                 continue
             
-            future_date = dates[date_idx + horizon]
+            # Calculate portfolio returns by quintile
+            returns_df = pd.DataFrame(returns_list)
+            portfolio_rets = returns_df.groupby('Quintile')['Return'].mean()
             
-            # Get returns at future date
-            future_rets = df[df['Report_Date'] == future_date][['Ticker', 'Ret']].copy()
-            
-            # Merge
-            merged = current[['Ticker', 'Quintile']].merge(future_rets, on='Ticker', how='inner')
-            
-            if len(merged) < 5:
-                continue
-            
-            # Calculate portfolio returns
-            portfolio_rets = merged.groupby('Quintile')['Ret'].mean()
-            
-            results_dict[horizon].append(portfolio_rets)
+            results_dict[period_name].append(portfolio_rets)
     
     # Aggregate results
     table_data = []
-    for horizon in horizons:
-        if len(results_dict[horizon]) == 0:
+    for period_name, start_day, end_day in periods:
+        if len(results_dict[period_name]) == 0:
             continue
         
         # Convert to DataFrame
-        all_rets = pd.DataFrame(results_dict[horizon])
+        all_rets = pd.DataFrame(results_dict[period_name])
         
-        # Calculate means and t-stats
-        mean_rets = all_rets.mean() * 52  # Annualize
+        # Calculate means and t-stats (NO annualization)
+        mean_rets = all_rets.mean()
         t_stats = (all_rets.mean() / all_rets.std()) * np.sqrt(len(all_rets))
         
         # Long-Short (Q5 - Q1)
         if 5 in all_rets.columns and 1 in all_rets.columns:
             ls_rets = all_rets[5] - all_rets[1]
-            ls_mean = ls_rets.mean() * 52
+            ls_mean = ls_rets.mean()
             ls_tstat = (ls_rets.mean() / ls_rets.std()) * np.sqrt(len(ls_rets))
         else:
             ls_mean = np.nan
             ls_tstat = np.nan
         
         row = {
-            'Horizon_Weeks': horizon,
+            'Period': period_name,
             'Q1_Return': mean_rets.get(1, np.nan),
             'Q2_Return': mean_rets.get(2, np.nan),
             'Q3_Return': mean_rets.get(3, np.nan),
             'Q4_Return': mean_rets.get(4, np.nan),
             'Q5_Return': mean_rets.get(5, np.nan),
             'LS_Return': ls_mean,
-            'LS_tstat': ls_tstat
+            'LS_tstat': ls_tstat,
+            'N_obs': len(all_rets)
         }
         table_data.append(row)
     
@@ -532,7 +727,6 @@ def table_V_portfolio_sorts(df):
     print(table.to_string(index=False))
     
     return table
-
 # ============================================================================
 # TABLE IV: DCOT Data Analysis
 # ============================================================================
@@ -565,19 +759,19 @@ def table_VI_smoothed_hp(df):
     
     # Regression 1: HP (not smoothed, with Basis)
     print("\nRegression 1a: R_{t+1} ~ HP + Basis + S*v + Ret")
-    res1a = fama_macbeth_regression(df, 'Ret_Lead', ['HP', 'Basis', 'S_v', 'Ret'])
+    res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['HP', 'Basis', 'S_v', 'Ret'])
     print(res1a.to_string(index=False))
     results['R_t1_HP'] = res1a
     
     # Regression 2: HP_Smooth (with Basis)
     print("\nRegression 2a: R_{t+1} ~ HP_Smooth + Basis + S*v + Ret")
-    res2a = fama_macbeth_regression(df, 'Ret_Lead', ['HP_Smooth_52w', 'Basis', 'S_v', 'Ret'])
+    res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['HP_Smooth_52w', 'Basis', 'S_v', 'Ret'])
     print(res2a.to_string(index=False))
     results['R_t1_HP_Smooth'] = res2a
     
     # Regression 3: HP_Smooth + Q (with Basis)
     print("\nRegression 3a: R_{t+1} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
-    res3a = fama_macbeth_regression(df, 'Ret_Lead', ['HP_Smooth_52w', 'Q_Comm', 'Basis', 'S_v', 'Ret'])
+    res3a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['HP_Smooth_52w', 'Q_Comm', 'Basis', 'S_v', 'Ret'])
     print(res3a.to_string(index=False))
     results['R_t1_HP_Smooth_Q'] = res3a
     
@@ -586,19 +780,19 @@ def table_VI_smoothed_hp(df):
     
     # Regression 1: HP (not smoothed, with Basis)
     print("\nRegression 1b: R_{t+2} ~ HP + Basis + S*v + Ret")
-    res1b = fama_macbeth_regression(df, 'Ret_Lead2', ['HP', 'Basis', 'S_v', 'Ret'])
+    res1b, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['HP', 'Basis', 'S_v', 'Ret'])
     print(res1b.to_string(index=False))
     results['R_t2_HP'] = res1b
     
     # Regression 2: HP_Smooth (with Basis)
     print("\nRegression 2b: R_{t+2} ~ HP_Smooth + Basis + S*v + Ret")
-    res2b = fama_macbeth_regression(df, 'Ret_Lead2', ['HP_Smooth_52w', 'Basis', 'S_v', 'Ret'])
+    res2b, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['HP_Smooth_52w', 'Basis', 'S_v', 'Ret'])
     print(res2b.to_string(index=False))
     results['R_t2_HP_Smooth'] = res2b
     
     # Regression 3: HP_Smooth + Q (with Basis)
     print("\nRegression 3b: R_{t+2} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
-    res3b = fama_macbeth_regression(df, 'Ret_Lead2', ['HP_Smooth_52w', 'Q_Comm', 'Basis', 'S_v', 'Ret'])
+    res3b, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['HP_Smooth_52w', 'Q_Comm', 'Basis', 'S_v', 'Ret'])
     print(res3b.to_string(index=False))
     results['R_t2_HP_Smooth_Q'] = res3b
     
