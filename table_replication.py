@@ -274,6 +274,65 @@ def table_I_summary_statistics(df):
     
     return table
 
+# def generate_latex_panel_b_mixed(df):
+#     """
+#     根据当前数据生成 Table I Panel B 的 LaTeX 代码。
+#     针对当前数据的特殊状态：
+#     - |Q| 列已经是百分数 (e.g., 3.76)，直接显示。
+#     - PT  列是原始小数 (e.g., 0.056)，需要乘以 100 显示。
+#     """
+    
+#     # 格式化函数：保留2位小数
+#     def fmt_val(val):
+#         return "{:.2f}".format(val)
+    
+#     # 格式化函数：乘以100后保留2位小数
+#     def fmt_pct(val):
+#         return "{:.2f}".format(val * 100)
+
+#     # 确保 Average 行在最后处理
+#     df_body = df[df['Ticker'] != 'AVERAGE'].copy()
+    
+#     # 获取 Average 行的数据（如果df里有就取，没有就重算）
+#     if 'AVERAGE' in df['Ticker'].values:
+#         avg_row = df[df['Ticker'] == 'AVERAGE'].iloc[0]
+#     else:
+#         avg_row = df.mean(numeric_only=True)
+
+#     print("\n" + "%" * 60)
+#     print("% LaTeX Code for Panel B (Corrected for your specific data scaling)")
+#     print("%" * 60)
+#     print(r"\begin{tabular*}{\textwidth}{l@{\extracolsep{\fill}}rrrr}")
+#     print(r"\toprule")
+#     print(r"& \multicolumn{2}{c}{Net Trading ($|Q|$, \%)} & \multicolumn{2}{c}{Propensity to Trade ($PT$, \%)} \\")
+#     print(r"\cmidrule{2-3} \cmidrule{4-5}")
+#     print(r"Commodity & Commercials & Non-Comm. & Commercials & Non-Comm. \\")
+#     print(r"\midrule")
+
+#     # 遍历每一行
+#     for _, row in df_body.iterrows():
+#         line = (f"{row['Ticker']} & "
+#                 f"{fmt_val(row['|Q_Comm|_Mean'])} & "      # Q 已经是百分数，直接打印
+#                 f"{fmt_val(row['|Q_NonComm|_Mean'])} & "   # Q 已经是百分数，直接打印
+#                 f"{fmt_pct(row['PT_Comm_Mean'])} & "       # PT 是小数，乘以 100
+#                 f"{fmt_pct(row['PT_NonComm_Mean'])} \\\\") # PT 是小数，乘以 100
+#         print(line)
+
+#     print(r"\midrule")
+#     # 打印 Average 行
+#     line_avg = (r"\textbf{Average} & "
+#                 f"{fmt_val(avg_row['|Q_Comm|_Mean'])} & "    # Q 直接打印
+#                 f"{fmt_val(avg_row['|Q_NonComm|_Mean'])} & " # Q 直接打印
+#                 f"{fmt_pct(avg_row['PT_Comm_Mean'])} & "     # PT * 100
+#                 f"{fmt_pct(avg_row['PT_NonComm_Mean'])} \\\\") # PT * 100
+#     print(line_avg)
+    
+#     print(r"\bottomrule")
+#     print(r"\end{tabular*}")
+
+# 这里的 table 必须是你刚才展示给我的那个 DataFrame（即 Q~3.76, PT~0.05 的那个）
+# generate_latex_panel_b_mixed(table)
+
 # ============================================================================
 # Fama-MacBeth Regression Function
 # ============================================================================
@@ -930,6 +989,7 @@ if __name__ == "__main__":
     
     # Generate tables
     table_I = table_I_summary_statistics(df)
+    # generate_latex_panel_b_mixed(table_I)
     table_II = table_II_position_changes_returns(df)
     table_III = table_III_return_predictability(df)
     table_IV = table_IV_dcot_analysis(df)
@@ -937,6 +997,7 @@ if __name__ == "__main__":
     table_VI = table_VI_smoothed_hp(df)
     table_VII = table_VII_hp_dcot(df)
     table_VIII = table_VIII_double_sorts(df)
+
     
     print("\n" + "=" * 70)
     print("TABLE REPLICATION COMPLETED")
