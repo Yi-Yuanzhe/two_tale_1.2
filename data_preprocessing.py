@@ -39,26 +39,97 @@ def load_cftc_data():
     
     return legacy_df, disagg_df
 
+# def process_cftc_legacy(df):
+#     """
+#     Process Legacy COT data and extract relevant columns
+#     """
+#     if df is None:
+#         return None
+    
+#     print("\nProcessing Legacy COT data...")
+    
+#     # Parse date column - try different column names
+#     date_cols = [col for col in df.columns if 'date' in col.lower() and ('yyyy-mm-dd' in col.lower() or 'report' in col.lower())]
+#     if date_cols:
+#         date_col = date_cols[0]
+#         df['Report_Date'] = pd.to_datetime(df[date_col], errors='coerce')
+#     else:
+#         print("✗ Could not find report date column")
+#         print(f"Available columns: {df.columns.tolist()[:5]}")
+#         return None
+    
+#     # Extract relevant columns
+#     required_cols = {
+#         'Open_Interest_All': ['Open Interest (All)', 'Open_Interest_All', 'OI_All'],
+#         'NonComm_Positions_Long_All': ['Noncommercial Positions-Long (All)', 'NonComm_Positions_Long_All', 'Noncommercial Long'],
+#         'NonComm_Positions_Short_All': ['Noncommercial Positions-Short (All)', 'NonComm_Positions_Short_All', 'Noncommercial Short'],
+#         'Comm_Positions_Long_All': ['Commercial Positions-Long (All)', 'Comm_Positions_Long_All', 'Commercial Long'],
+#         'Comm_Positions_Short_All': ['Commercial Positions-Short (All)', 'Comm_Positions_Short_All', 'Commercial Short'],
+#         'CFTC_Contract_Market_Code': ['CFTC Contract Market Code', 'CFTC_Contract_Market_Code', 'CFTC Code'],
+#         'Market_and_Exchange_Names': ['Market and Exchange Names', 'Market_and_Exchange_Names', 'Market']
+#     }
+    
+#     # Map columns
+#     column_map = {}
+#     for target_col, possible_names in required_cols.items():
+#         for col in df.columns:
+#             if col in possible_names:
+#                 column_map[col] = target_col
+#                 break
+    
+#     df_processed = df.rename(columns=column_map)
+    
+#     # Select columns
+#     keep_cols = ['Report_Date'] + list(required_cols.keys())
+#     keep_cols = [col for col in keep_cols if col in df_processed.columns]
+#     df_processed = df_processed[keep_cols].copy()
+    
+#     # Convert numeric columns
+#     numeric_cols = ['Open_Interest_All', 'NonComm_Positions_Long_All', 'NonComm_Positions_Short_All',
+#                     'Comm_Positions_Long_All', 'Comm_Positions_Short_All']
+#     for col in numeric_cols:
+#         if col in df_processed.columns:
+#             df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+    
+#     # Remove rows with missing critical data
+#     df_processed = df_processed.dropna(subset=['Report_Date', 'Open_Interest_All'])
+    
+#     print(f"✓ Processed {len(df_processed)} records")
+#     return df_processed
+
 def process_cftc_legacy(df):
     """
-    Process Legacy COT data and extract relevant columns
+    Process Legacy COT data with robust cleaning
     """
     if df is None:
         return None
     
     print("\nProcessing Legacy COT data...")
     
-    # Parse date column - try different column names
-    date_cols = [col for col in df.columns if 'date' in col.lower() and ('yyyy-mm-dd' in col.lower() or 'report' in col.lower())]
-    if date_cols:
-        date_col = date_cols[0]
-        df['Report_Date'] = pd.to_datetime(df[date_col], errors='coerce')
-    else:
-        print("✗ Could not find report date column")
-        print(f"Available columns: {df.columns.tolist()[:5]}")
-        return None
+    # 1. 统一列名（去除前后空格，防止 ' Code' 这种情况）
+    df.columns = df.columns.str.strip()
     
-    # Extract relevant columns
+    # 2. 智能查找日期列
+    # 优先找 YYMMDD 格式的列（诊断脚本显示这是存在的）
+    date_col = None
+    if 'As of Date in Form YYMMDD' in df.columns:
+        date_col = 'As of Date in Form YYMMDD'
+        # 转换为字符串并补零 (防止 940105 变成 940105 的整数)
+        df[date_col] = df[date_col].astype(str).str.zfill(6)
+        df['Report_Date'] = pd.to_datetime(df[date_col], format='%y%m%d', errors='coerce')
+    elif 'Report_Date_as_MM_DD_YYYY' in df.columns:
+        df['Report_Date'] = pd.to_datetime(df['Report_Date_as_MM_DD_YYYY'], errors='coerce')
+    else:
+        # 暴力搜索包含 date 的列
+        date_cols = [col for col in df.columns if 'date' in col.lower()]
+        if date_cols:
+            df['Report_Date'] = pd.to_datetime(df[date_cols[0]], errors='coerce')
+    
+    if 'Report_Date' not in df.columns:
+        print("✗ Could not parse Report Date")
+        return None
+
+    # 3. 提取关键列 (同原代码)
     required_cols = {
         'Open_Interest_All': ['Open Interest (All)', 'Open_Interest_All', 'OI_All'],
         'NonComm_Positions_Long_All': ['Noncommercial Positions-Long (All)', 'NonComm_Positions_Long_All', 'Noncommercial Long'],
@@ -69,7 +140,7 @@ def process_cftc_legacy(df):
         'Market_and_Exchange_Names': ['Market and Exchange Names', 'Market_and_Exchange_Names', 'Market']
     }
     
-    # Map columns
+    # 映射列名
     column_map = {}
     for target_col, possible_names in required_cols.items():
         for col in df.columns:
@@ -84,17 +155,26 @@ def process_cftc_legacy(df):
     keep_cols = [col for col in keep_cols if col in df_processed.columns]
     df_processed = df_processed[keep_cols].copy()
     
-    # Convert numeric columns
+    # 4. === 关键修复：清洗 CFTC 代码 ===
+    if 'CFTC_Contract_Market_Code' in df_processed.columns:
+        # 转为字符串 -> 去除浮点数小数点(如果被读成float) -> 去除空格 -> 补零
+        df_processed['CFTC_Contract_Market_Code'] = df_processed['CFTC_Contract_Market_Code'].apply(
+            lambda x: str(int(float(x))).strip().zfill(6) if pd.notnull(x) and str(x).replace('.','').isdigit() else str(x).strip()
+        )
+
+    # 5. 清洗数值列 (同原代码)
     numeric_cols = ['Open_Interest_All', 'NonComm_Positions_Long_All', 'NonComm_Positions_Short_All',
                     'Comm_Positions_Long_All', 'Comm_Positions_Short_All']
     for col in numeric_cols:
         if col in df_processed.columns:
             df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
     
-    # Remove rows with missing critical data
     df_processed = df_processed.dropna(subset=['Report_Date', 'Open_Interest_All'])
+    # 按日期排序，确保后续滚动窗口正确
+    df_processed = df_processed.sort_values('Report_Date')
     
-    print(f"✓ Processed {len(df_processed)} records")
+    print(f"✓ Processed {len(df_processed)} records (Date Range: {df_processed['Report_Date'].min().date()} to {df_processed['Report_Date'].max().date()})")
+
     return df_processed
 
 def process_cftc_disaggregated(df):
@@ -155,9 +235,58 @@ def process_cftc_disaggregated(df):
     print(f"✓ Processed {len(df_processed)} records")
     return df_processed
 
+# def load_and_resample_prices():
+#     """
+#     Load commodity price data and resample to weekly (Tuesday)
+#     """
+#     print("\n" + "=" * 60)
+#     print("Loading and Resampling Price Data...")
+#     print("=" * 60)
+    
+#     price_files = glob.glob('data/prices/*_prices.csv')
+#     price_dict = {}
+    
+#     for file in price_files:
+#         ticker = os.path.basename(file).replace('_prices.csv', '')
+#         try:
+#             # Read price file
+#             df = pd.read_csv(file)
+            
+#             # Parse date column
+#             if 'Date' in df.columns:
+#                 df['Date'] = pd.to_datetime(df['Date'])
+#                 df = df.set_index('Date')
+#             else:
+#                 continue
+            
+#             # Ensure Close column is numeric
+#             if 'Close' in df.columns:
+#                 df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
+#             else:
+#                 continue
+            
+#             # Drop rows with NaN in Close
+#             df = df.dropna(subset=['Close'])
+            
+#             # Resample to weekly, using Tuesday as anchor
+#             # COT reports show positions as of Tuesday close
+#             df_weekly = df.resample('W-TUE').last()
+            
+#             # Keep only Close price and rename
+#             if 'Close' in df_weekly.columns:
+#                 price_dict[ticker] = df_weekly[['Close']].rename(columns={'Close': f'{ticker}_Close'})
+#                 print(f"✓ {ticker:12} - {len(df_weekly)} weekly observations")
+            
+#         except Exception as e:
+#             print(f"✗ {ticker:12} - Error: {str(e)[:40]}")
+#             continue
+    
+#     return price_dict
+
 def load_and_resample_prices():
     """
     Load commodity price data and resample to weekly (Tuesday)
+    Includes dirty data cleaning
     """
     print("\n" + "=" * 60)
     print("Loading and Resampling Price Data...")
@@ -172,30 +301,35 @@ def load_and_resample_prices():
             # Read price file
             df = pd.read_csv(file)
             
-            # Parse date column
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'])
-                df = df.set_index('Date')
-            else:
-                continue
+            # === 关键修复：清洗脏数据 ===
+            # 1. 强制转换 Date，错误的变成 NaT
+            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
             
-            # Ensure Close column is numeric
+            # 2. 强制转换 Close，错误的变成 NaN
             if 'Close' in df.columns:
                 df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-            else:
-                continue
             
-            # Drop rows with NaN in Close
-            df = df.dropna(subset=['Close'])
+            # 3. 删除任何无效行（包括重复的表头行）
+            df = df.dropna(subset=['Date', 'Close'])
+            
+            # 4. 设置索引
+            df = df.set_index('Date')
+            df = df.sort_index()
             
             # Resample to weekly, using Tuesday as anchor
-            # COT reports show positions as of Tuesday close
-            df_weekly = df.resample('W-TUE').last()
-            
-            # Keep only Close price and rename
-            if 'Close' in df_weekly.columns:
-                price_dict[ticker] = df_weekly[['Close']].rename(columns={'Close': f'{ticker}_Close'})
-                print(f"✓ {ticker:12} - {len(df_weekly)} weekly observations")
+            if not df.empty:
+                df_weekly = df.resample('W-TUE').last()
+                
+                # 删除重采样后没有价格的周
+                df_weekly = df_weekly.dropna(subset=['Close'])
+                
+                if not df_weekly.empty:
+                    price_dict[ticker] = df_weekly[['Close']].rename(columns={'Close': f'{ticker}_Close'})
+                    print(f"✓ {ticker:12} - {len(df_weekly)} weekly observations ({df_weekly.index.min().date()} to {df_weekly.index.max().date()})")
+                else:
+                    print(f"✗ {ticker:12} - Empty after resampling")
+            else:
+                print(f"✗ {ticker:12} - Empty after cleaning")
             
         except Exception as e:
             print(f"✗ {ticker:12} - Error: {str(e)[:40]}")
@@ -377,7 +511,6 @@ def create_commodity_map():
         'CL': '067651',  # Crude Oil WTI - NYMEX (not ICE Europe)
         'HO': '022651',  # Heating Oil - NYMEX (main contract, not swaps)
         'NG': '023651',  # Natural Gas - NYMEX (not ICE)
-        'RB': '111659',  # RBOB Gasoline - NYMEX (not unleaded)
         
         # Precious Metals
         'GC': '088691',  # Gold - COMEX (not CBOT)
@@ -388,15 +521,15 @@ def create_commodity_map():
         # Base Metals
         'HG': '085692',  # Copper - COMEX
         
-        # Grains
+        # Grains 缺少 Minn Wheat
         'ZW': '001602',  # Wheat SRW - CBOT Chicago
         'KE': '001612',  # Wheat HRW - KCBT Kansas City
-        'MW': '001626',  # Wheat HRS - MGEX Minneapolis
         'ZC': '002602',  # Corn - CBOT
         'ZO': '004603',  # Oats - CBOT
         'ZS': '005602',  # Soybeans - CBOT
         'ZL': '007601',  # Soybean Oil - CBOT
         'ZM': '026603',  # Soybean Meal - CBOT
+        'RR': '039601',  # Rough Rice - CBOT
         
         # Softs
         'KC': '083731',  # Coffee - ICE (formerly CSCE)

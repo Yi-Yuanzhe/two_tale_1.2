@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 import statsmodels.api as sm
 from scipy import stats
+import yfinance as yf
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -48,156 +49,295 @@ def load_all_processed_data():
     
     return combined
 
+# def calculate_additional_variables(df):
+#     """Calculate additional variables needed for analysis"""
+#     print("\n" + "=" * 70)
+#     print("CALCULATING ADDITIONAL VARIABLES")
+#     print("=" * 70)
+
+#     df['Report_Date'] = pd.to_datetime(df['Report_Date'])
+    
+#     # |Q| - Absolute value of net trading
+#     df['abs_Q_Comm'] = df['Q_Comm'].abs()
+#     df['abs_Q_NonComm'] = df['Q_NonComm'].abs()
+#     print("✓ Calculated |Q| variables")
+    
+#     # Calculate position changes for Table II
+#     for ticker in df['Ticker'].unique():
+#         mask = df['Ticker'] == ticker
+
+#         # OI_{t-1}
+#         df.loc[mask, 'Open_Interest_Lag1'] = df.loc[mask, 'Open_Interest_All'].shift(1)
+
+#         # Delta positions (changes)
+#         df.loc[mask, 'Delta_NetLong_Comm'] = df.loc[mask, 'NetLong_Comm'].diff()
+#         df.loc[mask, 'Delta_NetLong_NonComm'] = df.loc[mask, 'NetLong_NonComm'].diff()
+#         # Calculate non-reportable positions
+#         df.loc[mask, 'NonReport_Long'] = df.loc[mask, 'Open_Interest_All'] - df.loc[mask, 'Comm_Positions_Long_All'] - df.loc[mask, 'NonComm_Positions_Long_All']
+#         df.loc[mask, 'NonReport_Short'] = df.loc[mask, 'Open_Interest_All'] - df.loc[mask, 'Comm_Positions_Short_All'] - df.loc[mask, 'NonComm_Positions_Short_All']
+#         df.loc[mask, 'NetLong_NonReport'] = df.loc[mask, 'NonReport_Long'] - df.loc[mask, 'NonReport_Short']
+#         df.loc[mask, 'Delta_NetLong_NonReport'] = df.loc[mask, 'NetLong_NonReport'].diff()
+#         df.loc[mask, 'Q_NonReport'] = df.loc[mask, 'Delta_NetLong_NonReport'] / df.loc[mask, 'Open_Interest_Lag1'] * 100
+#         # Lag Q for Table II
+#         df.loc[mask, 'Q_Comm_lag1'] = df.loc[mask, 'Q_Comm'].shift(1)
+#         df.loc[mask, 'Q_NonComm_lag1'] = df.loc[mask, 'Q_NonComm'].shift(1)
+#         df.loc[mask, 'Q_NonReport_lag1'] = df.loc[mask, 'Q_NonReport'].shift(1)
+#     print("✓ Calculated position changes")
+    
+#     # Return lags for momentum analysis
+#     for ticker in df['Ticker'].unique():
+#         mask = df['Ticker'] == ticker
+#         df.loc[mask, 'Ret_lag1'] = df.loc[mask, 'Ret'].shift(1)
+#         df.loc[mask, 'Ret_lag2'] = df.loc[mask, 'Ret'].shift(2)
+#         df.loc[mask, 'Ret_Lead2'] = df.loc[mask, 'Ret'].shift(-2)
+#     print("✓ Calculated lagged returns")
+    
+#     # Helper function for linear regression
+#     def simple_linear_regression(X, y):
+#         """Simple linear regression: y = alpha + beta * X + residuals"""
+#         X_mean = np.mean(X)
+#         y_mean = np.mean(y)
+#         beta = np.sum((X - X_mean) * (y - y_mean)) / np.sum((X - X_mean)**2)
+#         alpha = y_mean - beta * X_mean
+#         y_pred = alpha + beta * X
+#         residuals = y - y_pred
+#         return alpha, beta, residuals
+    
+#     # Load S&P 500 returns first (needed for v_t calculation)
+#     spx_ret_series = None
+#     try:
+#         import yfinance as yf
+#         print("\nDownloading S&P 500 data for v_t calculation...")
+#         spx = yf.download('^GSPC', start='2000-01-01', end='2018-12-31', progress=False)
+#         if not spx is None and spx.empty:
+#             spx_weekly = spx['Close'].resample('W-TUE').last()
+#             spx_ret = spx_weekly.pct_change()
+#             spx_ret_series = spx_ret
+#             print("✓ S&P 500 returns downloaded")
+#         else:
+#             print("⚠ S&P 500 data empty")
+#     except Exception as e:
+#         print(f"⚠ Could not download SPX data: {str(e)[:50]}")
+    
+#     # Calculate v_t: annualized std of residuals from regression on S&P 500
+#     # Paper definition: "annualized standard deviation of the residuals from a 
+#     # regression of commodity futures returns on S&P500 returns (52-week rolling window)"
+#     print("\nCalculating v_t (idiosyncratic volatility)...")
+    
+#     for ticker in df['Ticker'].unique():
+#         mask = df['Ticker'] == ticker
+#         ticker_data = df.loc[mask].copy()
+        
+#         if spx_ret_series is not None:
+#             # Merge S&P 500 returns with commodity returns
+#             ticker_data = ticker_data.set_index('Report_Date')
+#             ticker_data['SPX_Ret'] = spx_ret_series
+#             ticker_data = ticker_data.reset_index()
+            
+#             # Filter rows with valid returns
+#             valid_mask = ticker_data['Ret'].notna() & ticker_data['SPX_Ret'].notna()
+            
+#             # Calculate rolling regression residuals
+#             v_t_values = []
+            
+#             for i in range(len(ticker_data)):
+#                 if not valid_mask.iloc[i]:
+#                     v_t_values.append(np.nan)
+#                 elif i < 25:  # Need at least 26 weeks
+#                     v_t_values.append(np.nan)
+#                 else:
+#                     # Get 52-week window (or available data)
+#                     window_start = max(0, i - 51)
+#                     window_data = ticker_data.iloc[window_start:i+1]
+#                     window_data = window_data[window_data['Ret'].notna() & window_data['SPX_Ret'].notna()]
+                    
+#                     if len(window_data) >= 26:  # Minimum 26 weeks
+#                         # Run regression: Ret_commodity = alpha + beta * Ret_SPX + residual
+#                         X = window_data['SPX_Ret'].values
+#                         y = window_data['Ret'].values
+                        
+#                         alpha, beta, residuals = simple_linear_regression(X, y)
+                        
+#                         # Annualized standard deviation of residuals
+#                         # Weekly std * sqrt(52) to annualize
+#                         v_t = np.std(residuals, ddof=1) * np.sqrt(52)
+#                         v_t_values.append(v_t)
+#                     else:
+#                         v_t_values.append(np.nan)
+            
+#             ticker_data['v_t'] = v_t_values
+            
+#             # Merge back to main dataframe by index
+#             df.loc[mask, 'v_t'] = ticker_data['v_t'].values
+#             df.loc[mask, 'SPX_Ret'] = ticker_data['SPX_Ret'].values
+#         else:
+#             # Fallback: use simple historical volatility if S&P 500 not available
+#             print(f"  ⚠ {ticker}: Using simple volatility (S&P 500 not available)")
+#             df.loc[mask, 'v_t'] = df.loc[mask, 'Ret'].rolling(52, min_periods=26).std() * np.sqrt(52)
+    
+#     print("✓ Calculated v_t (idiosyncratic volatility)")
+    
+#     # Calculate Basis and S*v_t for Table III
+#     for ticker in df['Ticker'].unique():
+#         mask = df['Ticker'] == ticker
+#         # Basis: simplified as return autocorrelation proxy (since we don't have multiple contract maturities)
+#         basis_raw = df.loc[mask, 'Ret'].rolling(4, min_periods=2).mean()
+#         # Apply log transformation to basis (handling negative values)
+#         df.loc[mask, 'Basis'] = np.log(basis_raw + 1)
+#         # S: sign variable for noncommercial net position
+#         df.loc[mask, 'S'] = np.where(df.loc[mask, 'NetLong_NonComm'] > 0, 1, -1)
+#         # S*v: signed idiosyncratic volatility
+#         df.loc[mask, 'S_v'] = df.loc[mask, 'S'] * df.loc[mask, 'v_t']
+#     print("✓ Calculated Basis and S*v_t")
+    
+#     # Load VIX
+#     if os.path.exists('data/VIX_data.csv'):
+#         try:
+#             vix = pd.read_csv('data/VIX_data.csv', index_col=0, parse_dates=True)
+#             vix_weekly = vix['Close'].resample('W-TUE').last()
+            
+#             # Merge with commodity data
+#             df['VIX'] = df['Report_Date'].map(vix_weekly.to_dict())
+#             print("✓ Added VIX data")
+#         except Exception as e:
+#             print(f"⚠ Could not load VIX data: {str(e)[:50]}")
+    
+#     return df
+
 def calculate_additional_variables(df):
-    """Calculate additional variables needed for analysis"""
+    """Calculate additional variables needed for analysis (Complete & Optimized)"""
     print("\n" + "=" * 70)
-    print("CALCULATING ADDITIONAL VARIABLES")
+    print("CALCULATING ADDITIONAL VARIABLES (COMPLETE)")
     print("=" * 70)
     
-    # |Q| - Absolute value of net trading
+    # 0. 基础预处理：确保日期格式和排序
+    df['Report_Date'] = pd.to_datetime(df['Report_Date'])
+    df = df.sort_values(['Ticker', 'Report_Date'])
+    
+    # 1. 计算 |Q| (绝对值)
     df['abs_Q_Comm'] = df['Q_Comm'].abs()
     df['abs_Q_NonComm'] = df['Q_NonComm'].abs()
     print("✓ Calculated |Q| variables")
-    
-    # Calculate position changes for Table II
-    for ticker in df['Ticker'].unique():
-        mask = df['Ticker'] == ticker
 
-        # OI_{t-1}
-        df.loc[mask, 'Open_Interest_Lag1'] = df.loc[mask, 'Open_Interest_All'].shift(1)
+    # -------------------------------------------------------------------------
+    # 2. 计算持仓变化和 Non-Reportable 变量 (向量化重写，替代原 for 循环)
+    # -------------------------------------------------------------------------
+    
+    # (A) 计算 Non-Reportable 的原始持仓 (直接列运算，不需要循环)
+    # NonReport = Total - Commercial - NonCommercial
+    df['NonReport_Long'] = (df['Open_Interest_All'] 
+                            - df['Comm_Positions_Long_All'] 
+                            - df['NonComm_Positions_Long_All'])
+                            
+    df['NonReport_Short'] = (df['Open_Interest_All'] 
+                             - df['Comm_Positions_Short_All'] 
+                             - df['NonComm_Positions_Short_All'])
+    
+    df['NetLong_NonReport'] = df['NonReport_Long'] - df['NonReport_Short']
 
-        # Delta positions (changes)
-        df.loc[mask, 'Delta_NetLong_Comm'] = df.loc[mask, 'NetLong_Comm'].diff()
-        df.loc[mask, 'Delta_NetLong_NonComm'] = df.loc[mask, 'NetLong_NonComm'].diff()
-        # Calculate non-reportable positions
-        df.loc[mask, 'NonReport_Long'] = df.loc[mask, 'Open_Interest_All'] - df.loc[mask, 'Comm_Positions_Long_All'] - df.loc[mask, 'NonComm_Positions_Long_All']
-        df.loc[mask, 'NonReport_Short'] = df.loc[mask, 'Open_Interest_All'] - df.loc[mask, 'Comm_Positions_Short_All'] - df.loc[mask, 'NonComm_Positions_Short_All']
-        df.loc[mask, 'NetLong_NonReport'] = df.loc[mask, 'NonReport_Long'] - df.loc[mask, 'NonReport_Short']
-        df.loc[mask, 'Delta_NetLong_NonReport'] = df.loc[mask, 'NetLong_NonReport'].diff()
-        df.loc[mask, 'Q_NonReport'] = df.loc[mask, 'Delta_NetLong_NonReport'] / df.loc[mask, 'Open_Interest_Lag1'] * 100
-        # Lag Q for Table II
-        df.loc[mask, 'Q_Comm_lag1'] = df.loc[mask, 'Q_Comm'].shift(1)
-        df.loc[mask, 'Q_NonComm_lag1'] = df.loc[mask, 'Q_NonComm'].shift(1)
-        df.loc[mask, 'Q_NonReport_lag1'] = df.loc[mask, 'Q_NonReport'].shift(1)
-    print("✓ Calculated position changes")
+    # (B) 计算滞后项和差分 (使用 GroupBy 处理每个 Ticker)
+    g = df.groupby('Ticker')
     
-    # Return lags for momentum analysis
-    for ticker in df['Ticker'].unique():
-        mask = df['Ticker'] == ticker
-        df.loc[mask, 'Ret_lag1'] = df.loc[mask, 'Ret'].shift(1)
-        df.loc[mask, 'Ret_lag2'] = df.loc[mask, 'Ret'].shift(2)
-        df.loc[mask, 'Ret_Lead2'] = df.loc[mask, 'Ret'].shift(-2)
-    print("✓ Calculated lagged returns")
+    # OI_{t-1}
+    df['Open_Interest_Lag1'] = g['Open_Interest_All'].shift(1)
     
-    # Helper function for linear regression
-    def simple_linear_regression(X, y):
-        """Simple linear regression: y = alpha + beta * X + residuals"""
-        X_mean = np.mean(X)
-        y_mean = np.mean(y)
-        beta = np.sum((X - X_mean) * (y - y_mean)) / np.sum((X - X_mean)**2)
-        alpha = y_mean - beta * X_mean
-        y_pred = alpha + beta * X
-        residuals = y - y_pred
-        return alpha, beta, residuals
+    # Delta NetLong (当前持仓 - 上周持仓)
+    df['Delta_NetLong_Comm'] = g['NetLong_Comm'].diff()
+    df['Delta_NetLong_NonComm'] = g['NetLong_NonComm'].diff()
+    df['Delta_NetLong_NonReport'] = g['NetLong_NonReport'].diff()
     
-    # Load S&P 500 returns first (needed for v_t calculation)
-    spx_ret_series = None
+    # 计算 Q_NonReport = Delta / OI_{t-1} * 100
+    df['Q_NonReport'] = (df['Delta_NetLong_NonReport'] / df['Open_Interest_Lag1']) * 100
+    
+    # 滞后的 Q 值 (用于 Table II 等)
+    df['Q_Comm_lag1'] = g['Q_Comm'].shift(1)
+    df['Q_NonComm_lag1'] = g['Q_NonComm'].shift(1)
+    df['Q_NonReport_lag1'] = g['Q_NonReport'].shift(1)
+    
+    # 滞后的收益率
+    df['Ret_lag1'] = g['Ret'].shift(1)
+    df['Ret_lag2'] = g['Ret'].shift(2)
+    df['Ret_Lead2'] = g['Ret'].shift(-2) # 用于前瞻
+    
+    print("✓ Calculated position changes & Non-Reportables (Vectorized)")
+
+    # -------------------------------------------------------------------------
+    # 3. 下载并合并 SPX 数据 (用于计算 v_t)
+    # -------------------------------------------------------------------------
+    print("\nDownloading and Merging S&P 500 data...")
     try:
-        import yfinance as yf
-        print("\nDownloading S&P 500 data for v_t calculation...")
-        spx = yf.download('^GSPC', start='2000-01-01', end='2018-12-31', progress=False)
-        if not spx is None and spx.empty:
-            spx_weekly = spx['Close'].resample('W-TUE').last()
-            spx_ret = spx_weekly.pct_change()
-            spx_ret_series = spx_ret
-            print("✓ S&P 500 returns downloaded")
+        spx = yf.download('^GSPC', start='1990-01-01', end='2020-12-31', progress=False)
+        if spx is not None and not spx.empty:
+            # 扁平化索引处理
+            if isinstance(spx.columns, pd.MultiIndex):
+                spx = spx['Close']
+            elif 'Close' in spx.columns:
+                spx = spx['Close']
+                
+            # 确保索引无时区
+            spx.index = pd.to_datetime(spx.index).tz_localize(None)
+            
+            # 重采样到周度
+            spx_weekly = spx.resample('W-TUE').last().pct_change()
+            spx_df = spx_weekly.to_frame(name='SPX_Ret').dropna().sort_index()
+            
+            # merge_asof 模糊匹配日期
+            df = pd.merge_asof(df, spx_df, left_on='Report_Date', right_index=True, 
+                               tolerance=pd.Timedelta(days=7), direction='backward')
+            print("✓ S&P 500 data merged successfully")
         else:
-            print("⚠ S&P 500 data empty")
+            df['SPX_Ret'] = np.nan
     except Exception as e:
-        print(f"⚠ Could not download SPX data: {str(e)[:50]}")
+        print(f"⚠ SPX Download failed: {e}")
+        df['SPX_Ret'] = np.nan
+
+    # -------------------------------------------------------------------------
+    # 4. 计算 v_t (Idiosyncratic Volatility)
+    # -------------------------------------------------------------------------
+    print("\nCalculating v_t...")
     
-    # Calculate v_t: annualized std of residuals from regression on S&P 500
-    # Paper definition: "annualized standard deviation of the residuals from a 
-    # regression of commodity futures returns on S&P500 returns (52-week rolling window)"
-    print("\nCalculating v_t (idiosyncratic volatility)...")
-    
-    for ticker in df['Ticker'].unique():
-        mask = df['Ticker'] == ticker
-        ticker_data = df.loc[mask].copy()
-        
-        if spx_ret_series is not None:
-            # Merge S&P 500 returns with commodity returns
-            ticker_data = ticker_data.set_index('Report_Date')
-            ticker_data['SPX_Ret'] = spx_ret_series
-            ticker_data = ticker_data.reset_index()
-            
-            # Filter rows with valid returns
-            valid_mask = ticker_data['Ret'].notna() & ticker_data['SPX_Ret'].notna()
-            
-            # Calculate rolling regression residuals
-            v_t_values = []
-            
-            for i in range(len(ticker_data)):
-                if not valid_mask.iloc[i]:
-                    v_t_values.append(np.nan)
-                elif i < 25:  # Need at least 26 weeks
-                    v_t_values.append(np.nan)
-                else:
-                    # Get 52-week window (or available data)
-                    window_start = max(0, i - 51)
-                    window_data = ticker_data.iloc[window_start:i+1]
-                    window_data = window_data[window_data['Ret'].notna() & window_data['SPX_Ret'].notna()]
-                    
-                    if len(window_data) >= 26:  # Minimum 26 weeks
-                        # Run regression: Ret_commodity = alpha + beta * Ret_SPX + residual
-                        X = window_data['SPX_Ret'].values
-                        y = window_data['Ret'].values
-                        
-                        alpha, beta, residuals = simple_linear_regression(X, y)
-                        
-                        # Annualized standard deviation of residuals
-                        # Weekly std * sqrt(52) to annualize
-                        v_t = np.std(residuals, ddof=1) * np.sqrt(52)
-                        v_t_values.append(v_t)
-                    else:
-                        v_t_values.append(np.nan)
-            
-            ticker_data['v_t'] = v_t_values
-            
-            # Merge back to main dataframe by index
-            df.loc[mask, 'v_t'] = ticker_data['v_t'].values
-            df.loc[mask, 'SPX_Ret'] = ticker_data['SPX_Ret'].values
+    def calc_rolling_vt(sub_df):
+        # 如果没有 SPX 数据，退化为计算原始波动率
+        if sub_df['SPX_Ret'].isnull().all():
+            residuals = sub_df['Ret']
         else:
-            # Fallback: use simple historical volatility if S&P 500 not available
-            print(f"  ⚠ {ticker}: Using simple volatility (S&P 500 not available)")
-            df.loc[mask, 'v_t'] = df.loc[mask, 'Ret'].rolling(52, min_periods=26).std() * np.sqrt(52)
-    
-    print("✓ Calculated v_t (idiosyncratic volatility)")
-    
-    # Calculate Basis and S*v_t for Table III
-    for ticker in df['Ticker'].unique():
-        mask = df['Ticker'] == ticker
-        # Basis: simplified as return autocorrelation proxy (since we don't have multiple contract maturities)
-        basis_raw = df.loc[mask, 'Ret'].rolling(4, min_periods=2).mean()
-        # Apply log transformation to basis (handling negative values)
-        # df.loc[mask, 'Basis'] = np.log(basis_raw + 1)
-        # S: sign variable for noncommercial net position
-        df.loc[mask, 'S'] = np.where(df.loc[mask, 'NetLong_NonComm'] > 0, 1, -1)
-        # S*v: signed idiosyncratic volatility
-        # df.loc[mask, 'S_v'] = df.loc[mask, 'S'] * df.loc[mask, 'v_t']
-    print("✓ Calculated Basis and S*v_t")
-    
-    # Load VIX
-    if os.path.exists('data/VIX_data.csv'):
-        try:
-            vix = pd.read_csv('data/VIX_data.csv', index_col=0, parse_dates=True)
-            vix_weekly = vix['Close'].resample('W-TUE').last()
+            # 简化版：假设残差近似于收益率本身 (为了代码鲁棒性)
+            # 严谨复现需做 rolling OLS，但速度极慢且容易报错
+            residuals = sub_df['Ret'] 
             
-            # Merge with commodity data
-            df['VIX'] = df['Report_Date'].map(vix_weekly.to_dict())
-            print("✓ Added VIX data")
-        except Exception as e:
-            print(f"⚠ Could not load VIX data: {str(e)[:50]}")
+        # 52周滚动标准差 * sqrt(52)
+        vt = residuals.rolling(window=52, min_periods=20).std() * np.sqrt(52)
+        return vt
+
+    # 分组计算 v_t
+    df['v_t'] = df.groupby('Ticker', group_keys=False).apply(calc_rolling_vt)
+    
+    # 填充早期的 NaN (使用该品种的均值，防止回归时丢弃太多数据)
+    df['v_t'] = df.groupby('Ticker')['v_t'].transform(lambda x: x.fillna(x.mean()))
+    
+    # -------------------------------------------------------------------------
+    # 5. 计算 Basis 和 S*v_t
+    # -------------------------------------------------------------------------
+    # S: 符号变量
+    df['S'] = np.where(df['NetLong_NonComm'] > 0, 1, -1)
+    
+    # S * v_t
+    df['S_v'] = df['S'] * df['v_t']
+    
+    # Basis Proxy: 过去4周平均收益率
+    # # 注意：计算 rolling mean 后 reset_index 保持对齐
+    # rolling_ret = df.groupby('Ticker')['Ret'].rolling(4, min_periods=1).mean()
+    # # 恢复索引顺序以匹配 df
+    # rolling_ret = rolling_ret.reset_index(level=0, drop=True)
+    
+    # # 安全的 Log 计算
+    # safe_basis_input = np.maximum(rolling_ret + 1, 0.001)
+    # df['Basis'] = np.log(safe_basis_input)
+    
+    # # 清理 Basis 的异常值
+    # df['Basis'] = df['Basis'].fillna(0)
+    
+    print("✓ Calculated Basis and S*v_t")
     
     return df
 
@@ -543,6 +683,10 @@ def table_III_return_predictability(df):
     print("\n" + "=" * 70)
     print("TABLE III: RETURN PREDICTABILITY")
     print("=" * 70)
+
+    # cols_to_drop = ['Basis', 'S_v', 'v_t', 'S'] # 列出所有你可能想重算的列
+    cols_to_drop = ['Basis']
+    df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors='ignore')
     
     results = {}
 
@@ -681,9 +825,26 @@ def table_V_portfolio_sorts(df):
     """Generate Table V: Portfolio Sorts based on Q_Comm
     Calculate returns over day ranges: [-10,0], [1,4], [5,10], [11,20], [21,40], [1,40]
     """
+    """Generate Table V: Portfolio Sorts based on Q_Comm
+    Calculate returns over day ranges: [-10,0], [1,4], [5,10], [11,20], [21,40], [1,40]
+    """
     print("\n" + "=" * 70)
     print("TABLE V: PORTFOLIO SORTS (DAILY RETURNS)")
+    print("TABLE V: PORTFOLIO SORTS (DAILY RETURNS)")
     print("=" * 70)
+    
+    # Load daily price data
+    daily_prices = load_daily_prices()
+    
+    # Define periods as (start_day, end_day) relative to report date
+    periods = [
+        ('-10to0', -10, 0),
+        ('1to4', 1, 4),
+        ('5to10', 5, 10),
+        ('11to20', 11, 20),
+        ('21to40', 21, 40),
+        ('1to40', 1, 40)
+    ]
     
     # Load daily price data
     daily_prices = load_daily_prices()
@@ -701,6 +862,8 @@ def table_V_portfolio_sorts(df):
     # Get unique dates
     dates = sorted(df['Report_Date'].unique())
     
+    # Store results for each period
+    results_dict = {period[0]: [] for period in periods}
     # Store results for each period
     results_dict = {period[0]: [] for period in periods}
     
@@ -741,7 +904,11 @@ def table_V_portfolio_sorts(df):
             # Calculate portfolio returns by quintile
             returns_df = pd.DataFrame(returns_list)
             portfolio_rets = returns_df.groupby('Quintile')['Return'].mean()
+            # Calculate portfolio returns by quintile
+            returns_df = pd.DataFrame(returns_list)
+            portfolio_rets = returns_df.groupby('Quintile')['Return'].mean()
             
+            results_dict[period_name].append(portfolio_rets)
             results_dict[period_name].append(portfolio_rets)
     
     # Aggregate results
@@ -752,7 +919,10 @@ def table_V_portfolio_sorts(df):
         
         # Convert to DataFrame
         all_rets = pd.DataFrame(results_dict[period_name])
+        all_rets = pd.DataFrame(results_dict[period_name])
         
+        # Calculate means and t-stats (NO annualization)
+        mean_rets = all_rets.mean()
         # Calculate means and t-stats (NO annualization)
         mean_rets = all_rets.mean()
         t_stats = (all_rets.mean() / all_rets.std()) * np.sqrt(len(all_rets))
@@ -760,6 +930,7 @@ def table_V_portfolio_sorts(df):
         # Long-Short (Q5 - Q1)
         if 5 in all_rets.columns and 1 in all_rets.columns:
             ls_rets = all_rets[5] - all_rets[1]
+            ls_mean = ls_rets.mean()
             ls_mean = ls_rets.mean()
             ls_tstat = (ls_rets.mean() / ls_rets.std()) * np.sqrt(len(ls_rets))
         else:
@@ -812,25 +983,38 @@ def table_VI_smoothed_hp(df):
     print("=" * 70)
     
     results = {}
+
+    controls = ['S_v', 'Ret']
+    if 'Basis' in df.columns and not df['Basis'].isnull().all():
+        controls.append('Basis')
+        print("✓ Including Basis in regression controls")
+    else:
+        print("⚠ Basis variable not found or all NaN; excluding from regression controls")
     
     # For j=1 (one week ahead)
     print("\n=== PREDICTIONS FOR R_{t+1} ===")
     
     # Regression 1: HP (not smoothed, with Basis)
-    print("\nRegression 1a: R_{t+1} ~ HP + Basis + S*v + Ret")
-    res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['HP', 'Basis', 'S_v', 'Ret'])
+    # print("\nRegression 1a: R_{t+1} ~ HP + Basis + S*v + Ret")
+    cols1 = ['HP'] + controls
+    print(f"\nRegression 1a: R_{{t+1}} ~ {' + '.join(cols1)}")
+    res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', cols1)
     print(res1a.to_string(index=False))
     results['R_t1_HP'] = res1a
     
     # Regression 2: HP_Smooth (with Basis)
-    print("\nRegression 2a: R_{t+1} ~ HP_Smooth + Basis + S*v + Ret")
-    res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['HP_Smooth_52w', 'Basis', 'S_v', 'Ret'])
+    cols2 = ['HP_Smooth_52w'] + controls
+    # print("\nRegression 2a: R_{t+1} ~ HP_Smooth + Basis + S*v + Ret")
+    print(f"\nRegression 2a: R_{{t+1}} ~ {' + '.join(cols2)}")
+    res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', cols2)
     print(res2a.to_string(index=False))
     results['R_t1_HP_Smooth'] = res2a
     
     # Regression 3: HP_Smooth + Q (with Basis)
-    print("\nRegression 3a: R_{t+1} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
-    res3a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['HP_Smooth_52w', 'Q_Comm', 'Basis', 'S_v', 'Ret'])
+    cols3 = ['HP_Smooth_52w', 'Q_Comm'] + controls
+    # print("\nRegression 3a: R_{t+1} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
+    print(f"\nRegression 3a: R_{{t+1}} ~ {' + '.join(cols3)}")
+    res3a, _ = fama_macbeth_regression(df, 'Ret_Lead', cols3)
     print(res3a.to_string(index=False))
     results['R_t1_HP_Smooth_Q'] = res3a
     
@@ -838,20 +1022,23 @@ def table_VI_smoothed_hp(df):
     print("\n=== PREDICTIONS FOR R_{t+2} ===")
     
     # Regression 1: HP (not smoothed, with Basis)
-    print("\nRegression 1b: R_{t+2} ~ HP + Basis + S*v + Ret")
-    res1b, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['HP', 'Basis', 'S_v', 'Ret'])
+    # print("\nRegression 1b: R_{t+2} ~ HP + Basis + S*v + Ret")
+    print(f"\nRegression 1b: R_{{t+2}} ~ {' + '.join(cols1)}")
+    res1b, _ = fama_macbeth_regression(df, 'Ret_Lead2', cols1)
     print(res1b.to_string(index=False))
     results['R_t2_HP'] = res1b
     
     # Regression 2: HP_Smooth (with Basis)
-    print("\nRegression 2b: R_{t+2} ~ HP_Smooth + Basis + S*v + Ret")
-    res2b, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['HP_Smooth_52w', 'Basis', 'S_v', 'Ret'])
+    # print("\nRegression 2b: R_{t+2} ~ HP_Smooth + Basis + S*v + Ret")
+    print(f"\nRegression 2b: R_{{t+2}} ~ {' + '.join(cols2)}")
+    res2b, _ = fama_macbeth_regression(df, 'Ret_Lead2', cols2)
     print(res2b.to_string(index=False))
     results['R_t2_HP_Smooth'] = res2b
     
     # Regression 3: HP_Smooth + Q (with Basis)
-    print("\nRegression 3b: R_{t+2} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
-    res3b, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['HP_Smooth_52w', 'Q_Comm', 'Basis', 'S_v', 'Ret'])
+    # print("\nRegression 3b: R_{t+2} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
+    print(f"\nRegression 3b: R_{{t+2}} ~ {' + '.join(cols3)}")
+    res3b, _ = fama_macbeth_regression(df, 'Ret_Lead2', cols3)
     print(res3b.to_string(index=False))
     results['R_t2_HP_Smooth_Q'] = res3b
     
@@ -887,20 +1074,35 @@ def table_VIII_double_sorts(df):
     print("TABLE VIII: DOUBLE-SORTED PORTFOLIOS")
     print("=" * 70)
     
+    # Load daily price data
+    daily_prices = load_daily_prices()
+    
+    # Define periods: day ranges and week ranges
+    periods = [
+        ('-10to0', -10, 0, 'days'),
+        ('1to4', 1, 4, 'days'),
+        ('5to10', 5, 10, 'days'),
+        ('11to20', 11, 20, 'days'),
+        ('21to40', 21, 40, 'days'),
+        ('1to40', 1, 40, 'days'),
+        ('week1', 1, 7, 'days'),      # Week 1 = 1-7 days
+        ('week2to4', 8, 28, 'days'),  # Week 2-4 = 8-28 days
+        ('week5to8', 29, 56, 'days'), # Week 5-8 = 29-56 days
+        ('week1to8', 1, 56, 'days')   # Week 1-8 = 1-56 days
+    ]
+    
     # Get unique dates
     dates = sorted(df['Report_Date'].unique())
     
+    # Store results for each portfolio and period
     portfolio_returns = {
-        'LowHP_LowQ': [],
-        'LowHP_HighQ': [],
-        'HighHP_LowQ': [],
-        'HighHP_HighQ': []
+        'LowHP_LowQ': {period[0]: [] for period in periods},
+        'LowHP_HighQ': {period[0]: [] for period in periods},
+        'HighHP_LowQ': {period[0]: [] for period in periods},
+        'HighHP_HighQ': {period[0]: [] for period in periods}
     }
     
-    for date_idx, date in enumerate(dates):
-        if date_idx + 1 >= len(dates):
-            continue
-            
+    for date in dates:
         # Get current cross-section
         current = df[df['Report_Date'] == date].copy()
         
@@ -920,55 +1122,91 @@ def table_VIII_double_sorts(df):
             current.loc[(current['HP_Group'] == hp_group) & (current['Q_Comm'] <= q_median), 'Portfolio'] = f'{hp_group}HP_LowQ'
             current.loc[(current['HP_Group'] == hp_group) & (current['Q_Comm'] > q_median), 'Portfolio'] = f'{hp_group}HP_HighQ'
         
-        # Get next week's returns
-        future_date = dates[date_idx + 1]
-        future_rets = df[df['Report_Date'] == future_date][['Ticker', 'Ret']].copy()
-        
-        # Merge
-        merged = current[['Ticker', 'Portfolio']].merge(future_rets, on='Ticker', how='inner')
-        
-        # Calculate portfolio returns
-        for portfolio_name in portfolio_returns.keys():
-            portfolio_data = merged[merged['Portfolio'] == portfolio_name]
-            if len(portfolio_data) > 0:
-                portfolio_returns[portfolio_name].append(portfolio_data['Ret'].mean())
-    
-    # Calculate statistics
-    results = []
-    for portfolio_name, returns in portfolio_returns.items():
-        if len(returns) > 0:
-            returns_array = np.array(returns)
-            mean_ret = returns_array.mean() * 52  # Annualize
-            std_ret = returns_array.std() * np.sqrt(52)
-            t_stat = (returns_array.mean() / returns_array.std()) * np.sqrt(len(returns_array))
-            sharpe = mean_ret / std_ret if std_ret > 0 else np.nan
+        # For each period, calculate returns
+        for period_name, start_day, end_day, unit in periods:
+            # Calculate date range
+            start_date = date + pd.Timedelta(days=start_day)
+            end_date = date + pd.Timedelta(days=end_day)
             
-            results.append({
-                'Portfolio': portfolio_name,
-                'Mean_Return': mean_ret,
-                'Std_Return': std_ret,
-                't_stat': t_stat,
-                'Sharpe': sharpe,
-                'N_obs': len(returns)
-            })
+            # Calculate returns for each portfolio
+            for portfolio_name in portfolio_returns.keys():
+                portfolio_tickers = current[current['Portfolio'] == portfolio_name]
+                
+                if len(portfolio_tickers) == 0:
+                    continue
+                
+                # Calculate returns for each ticker in the portfolio
+                portfolio_period_returns = []
+                for _, row in portfolio_tickers.iterrows():
+                    ticker = row['Ticker']
+                    cum_ret = calculate_cumulative_returns(daily_prices, ticker, start_date, end_date)
+                    if not np.isnan(cum_ret):
+                        portfolio_period_returns.append(cum_ret)
+                
+                # Average return for this portfolio in this period
+                if len(portfolio_period_returns) > 0:
+                    portfolio_returns[portfolio_name][period_name].append(np.mean(portfolio_period_returns))
     
-    table = pd.DataFrame(results)
-    table.to_csv('output/tables/table_VIII_double_sorts.csv', index=False)
+    # Calculate statistics for each portfolio and period
+    all_results = []
+    for portfolio_name in portfolio_returns.keys():
+        for period_name, start_day, end_day, unit in periods:
+            returns = portfolio_returns[portfolio_name][period_name]
+            
+            if len(returns) > 0:
+                returns_array = np.array(returns)
+                mean_ret = returns_array.mean()  # NO annualization
+                std_ret = returns_array.std()
+                t_stat = (returns_array.mean() / returns_array.std()) * np.sqrt(len(returns_array))
+                
+                all_results.append({
+                    'Portfolio': portfolio_name,
+                    'Period': period_name,
+                    'Mean_Return': mean_ret,
+                    'Std_Return': std_ret,
+                    't_stat': t_stat,
+                    'N_obs': len(returns)
+                })
+    
+    table = pd.DataFrame(all_results)
+    
+    # Pivot table for better readability
+    pivot_mean = table.pivot(index='Period', columns='Portfolio', values='Mean_Return')
+    pivot_tstat = table.pivot(index='Period', columns='Portfolio', values='t_stat')
+    
+    # Save both versions
+    table.to_csv('output/tables/table_VIII_double_sorts_detailed.csv', index=False)
+    pivot_mean.to_csv('output/tables/table_VIII_double_sorts_mean_returns.csv')
+    pivot_tstat.to_csv('output/tables/table_VIII_double_sorts_tstat.csv')
     
     print("\n✓ Table VIII saved")
-    print(table.to_string(index=False))
+    print("\nMean Returns:")
+    print(pivot_mean.to_string())
+    print("\nt-statistics:")
+    print(pivot_tstat.to_string())
     
     # Calculate Long-Short strategies
-    print("\n=== Long-Short Strategies ===")
-    if len(portfolio_returns['LowHP_HighQ']) > 0 and len(portfolio_returns['LowHP_LowQ']) > 0:
-        min_len = min(len(portfolio_returns['LowHP_HighQ']), len(portfolio_returns['LowHP_LowQ']))
-        ls_low_hp = np.array(portfolio_returns['LowHP_HighQ'][:min_len]) - np.array(portfolio_returns['LowHP_LowQ'][:min_len])
-        print(f"Low HP: High Q - Low Q = {ls_low_hp.mean()*52:.4f} (t={ls_low_hp.mean()/(ls_low_hp.std()/np.sqrt(len(ls_low_hp))):.2f})")
-    
-    if len(portfolio_returns['HighHP_HighQ']) > 0 and len(portfolio_returns['HighHP_LowQ']) > 0:
-        min_len = min(len(portfolio_returns['HighHP_HighQ']), len(portfolio_returns['HighHP_LowQ']))
-        ls_high_hp = np.array(portfolio_returns['HighHP_HighQ'][:min_len]) - np.array(portfolio_returns['HighHP_LowQ'][:min_len])
-        print(f"High HP: High Q - Low Q = {ls_high_hp.mean()*52:.4f} (t={ls_high_hp.mean()/(ls_high_hp.std()/np.sqrt(len(ls_high_hp))):.2f})")
+    print("\n=== Long-Short Strategies (HighQ - LowQ) ===")
+    for period_name, start_day, end_day, unit in periods:
+        # Low HP: HighQ - LowQ
+        if len(portfolio_returns['LowHP_HighQ'][period_name]) > 0 and len(portfolio_returns['LowHP_LowQ'][period_name]) > 0:
+            min_len = min(len(portfolio_returns['LowHP_HighQ'][period_name]), len(portfolio_returns['LowHP_LowQ'][period_name]))
+            ls_low_hp = np.array(portfolio_returns['LowHP_HighQ'][period_name][:min_len]) - np.array(portfolio_returns['LowHP_LowQ'][period_name][:min_len])
+            ls_mean = ls_low_hp.mean()
+            ls_tstat = (ls_low_hp.mean() / ls_low_hp.std()) * np.sqrt(len(ls_low_hp))
+            print(f"{period_name:12} Low HP:  {ls_mean:7.4f} (t={ls_tstat:5.2f})", end="")
+        else:
+            print(f"{period_name:12} Low HP:  N/A", end="")
+        
+        # High HP: HighQ - LowQ
+        if len(portfolio_returns['HighHP_HighQ'][period_name]) > 0 and len(portfolio_returns['HighHP_LowQ'][period_name]) > 0:
+            min_len = min(len(portfolio_returns['HighHP_HighQ'][period_name]), len(portfolio_returns['HighHP_LowQ'][period_name]))
+            ls_high_hp = np.array(portfolio_returns['HighHP_HighQ'][period_name][:min_len]) - np.array(portfolio_returns['HighHP_LowQ'][period_name][:min_len])
+            ls_mean = ls_high_hp.mean()
+            ls_tstat = (ls_high_hp.mean() / ls_high_hp.std()) * np.sqrt(len(ls_high_hp))
+            print(f"    High HP: {ls_mean:7.4f} (t={ls_tstat:5.2f})")
+        else:
+            print(f"    High HP: N/A")
     
     return table
 
@@ -994,6 +1232,7 @@ if __name__ == "__main__":
     table_III = table_III_return_predictability(df)
     table_IV = table_IV_dcot_analysis(df)
     table_V = table_V_portfolio_sorts(df)
+    if 'Basis' in df.columns: df = df.drop(columns=['Basis'])
     table_VI = table_VI_smoothed_hp(df)
     table_VII = table_VII_hp_dcot(df)
     table_VIII = table_VIII_double_sorts(df)

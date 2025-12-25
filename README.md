@@ -55,6 +55,7 @@ python table_replication.py
 - 数据源：Yahoo Finance
 
 **涵盖商品**
+> [!note]与原文中相比仅缺少 Minneapolis HRS (Hard Red Spring) Wheat。
 
 | 类别   | 代码 |
 |--------|------|

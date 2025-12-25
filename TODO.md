@@ -11,5 +11,5 @@
 - 使用 DCOT 持仓数据复现：Table IV，Table VII
 - 文章非主要结论的 Table 复现：Table IX，Table X，Table XI，Table XII
 
-[!note] 复现新 table 时尽量尝试新开 py 文件，不要修改原 py 文件，保证可读性。
+>[!note] 复现新 table 时尽量尝试新开 py 文件，不要修改原 py 文件，保证可读性。
 
