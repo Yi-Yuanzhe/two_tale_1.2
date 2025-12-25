@@ -825,26 +825,9 @@ def table_V_portfolio_sorts(df):
     """Generate Table V: Portfolio Sorts based on Q_Comm
     Calculate returns over day ranges: [-10,0], [1,4], [5,10], [11,20], [21,40], [1,40]
     """
-    """Generate Table V: Portfolio Sorts based on Q_Comm
-    Calculate returns over day ranges: [-10,0], [1,4], [5,10], [11,20], [21,40], [1,40]
-    """
     print("\n" + "=" * 70)
     print("TABLE V: PORTFOLIO SORTS (DAILY RETURNS)")
-    print("TABLE V: PORTFOLIO SORTS (DAILY RETURNS)")
     print("=" * 70)
-    
-    # Load daily price data
-    daily_prices = load_daily_prices()
-    
-    # Define periods as (start_day, end_day) relative to report date
-    periods = [
-        ('-10to0', -10, 0),
-        ('1to4', 1, 4),
-        ('5to10', 5, 10),
-        ('11to20', 11, 20),
-        ('21to40', 21, 40),
-        ('1to40', 1, 40)
-    ]
     
     # Load daily price data
     daily_prices = load_daily_prices()
@@ -862,8 +845,6 @@ def table_V_portfolio_sorts(df):
     # Get unique dates
     dates = sorted(df['Report_Date'].unique())
     
-    # Store results for each period
-    results_dict = {period[0]: [] for period in periods}
     # Store results for each period
     results_dict = {period[0]: [] for period in periods}
     
@@ -904,11 +885,7 @@ def table_V_portfolio_sorts(df):
             # Calculate portfolio returns by quintile
             returns_df = pd.DataFrame(returns_list)
             portfolio_rets = returns_df.groupby('Quintile')['Return'].mean()
-            # Calculate portfolio returns by quintile
-            returns_df = pd.DataFrame(returns_list)
-            portfolio_rets = returns_df.groupby('Quintile')['Return'].mean()
             
-            results_dict[period_name].append(portfolio_rets)
             results_dict[period_name].append(portfolio_rets)
     
     # Aggregate results
@@ -919,10 +896,7 @@ def table_V_portfolio_sorts(df):
         
         # Convert to DataFrame
         all_rets = pd.DataFrame(results_dict[period_name])
-        all_rets = pd.DataFrame(results_dict[period_name])
         
-        # Calculate means and t-stats (NO annualization)
-        mean_rets = all_rets.mean()
         # Calculate means and t-stats (NO annualization)
         mean_rets = all_rets.mean()
         t_stats = (all_rets.mean() / all_rets.std()) * np.sqrt(len(all_rets))
@@ -930,7 +904,6 @@ def table_V_portfolio_sorts(df):
         # Long-Short (Q5 - Q1)
         if 5 in all_rets.columns and 1 in all_rets.columns:
             ls_rets = all_rets[5] - all_rets[1]
-            ls_mean = ls_rets.mean()
             ls_mean = ls_rets.mean()
             ls_tstat = (ls_rets.mean() / ls_rets.std()) * np.sqrt(len(ls_rets))
         else:
@@ -1068,10 +1041,10 @@ def table_VII_hp_dcot(df):
 def table_VIII_double_sorts(df):
     """Generate Table VIII: Double-Sorted Portfolios
     Sort by HP_Smooth first (High/Low), then by Q_Comm within each HP group
-    Create 2x2 matrix showing returns for all combinations
+    Calculate returns over multiple periods (days and weeks)
     """
     print("\n" + "=" * 70)
-    print("TABLE VIII: DOUBLE-SORTED PORTFOLIOS")
+    print("TABLE VIII: DOUBLE-SORTED PORTFOLIOS (DAILY RETURNS)")
     print("=" * 70)
     
     # Load daily price data
