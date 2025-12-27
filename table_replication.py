@@ -49,182 +49,19 @@ def load_all_processed_data():
     
     return combined
 
-# def calculate_additional_variables(df):
-#     """Calculate additional variables needed for analysis"""
-#     print("\n" + "=" * 70)
-#     print("CALCULATING ADDITIONAL VARIABLES")
-#     print("=" * 70)
-
-#     df['Report_Date'] = pd.to_datetime(df['Report_Date'])
-    
-#     # |Q| - Absolute value of net trading
-#     df['abs_Q_Comm'] = df['Q_Comm'].abs()
-#     df['abs_Q_NonComm'] = df['Q_NonComm'].abs()
-#     print("✓ Calculated |Q| variables")
-    
-#     # Calculate position changes for Table II
-#     for ticker in df['Ticker'].unique():
-#         mask = df['Ticker'] == ticker
-
-#         # OI_{t-1}
-#         df.loc[mask, 'Open_Interest_Lag1'] = df.loc[mask, 'Open_Interest_All'].shift(1)
-
-#         # Delta positions (changes)
-#         df.loc[mask, 'Delta_NetLong_Comm'] = df.loc[mask, 'NetLong_Comm'].diff()
-#         df.loc[mask, 'Delta_NetLong_NonComm'] = df.loc[mask, 'NetLong_NonComm'].diff()
-#         # Calculate non-reportable positions
-#         df.loc[mask, 'NonReport_Long'] = df.loc[mask, 'Open_Interest_All'] - df.loc[mask, 'Comm_Positions_Long_All'] - df.loc[mask, 'NonComm_Positions_Long_All']
-#         df.loc[mask, 'NonReport_Short'] = df.loc[mask, 'Open_Interest_All'] - df.loc[mask, 'Comm_Positions_Short_All'] - df.loc[mask, 'NonComm_Positions_Short_All']
-#         df.loc[mask, 'NetLong_NonReport'] = df.loc[mask, 'NonReport_Long'] - df.loc[mask, 'NonReport_Short']
-#         df.loc[mask, 'Delta_NetLong_NonReport'] = df.loc[mask, 'NetLong_NonReport'].diff()
-#         df.loc[mask, 'Q_NonReport'] = df.loc[mask, 'Delta_NetLong_NonReport'] / df.loc[mask, 'Open_Interest_Lag1'] * 100
-#         # Lag Q for Table II
-#         df.loc[mask, 'Q_Comm_lag1'] = df.loc[mask, 'Q_Comm'].shift(1)
-#         df.loc[mask, 'Q_NonComm_lag1'] = df.loc[mask, 'Q_NonComm'].shift(1)
-#         df.loc[mask, 'Q_NonReport_lag1'] = df.loc[mask, 'Q_NonReport'].shift(1)
-#     print("✓ Calculated position changes")
-    
-#     # Return lags for momentum analysis
-#     for ticker in df['Ticker'].unique():
-#         mask = df['Ticker'] == ticker
-#         df.loc[mask, 'Ret_lag1'] = df.loc[mask, 'Ret'].shift(1)
-#         df.loc[mask, 'Ret_lag2'] = df.loc[mask, 'Ret'].shift(2)
-#         df.loc[mask, 'Ret_Lead2'] = df.loc[mask, 'Ret'].shift(-2)
-#     print("✓ Calculated lagged returns")
-    
-#     # Helper function for linear regression
-#     def simple_linear_regression(X, y):
-#         """Simple linear regression: y = alpha + beta * X + residuals"""
-#         X_mean = np.mean(X)
-#         y_mean = np.mean(y)
-#         beta = np.sum((X - X_mean) * (y - y_mean)) / np.sum((X - X_mean)**2)
-#         alpha = y_mean - beta * X_mean
-#         y_pred = alpha + beta * X
-#         residuals = y - y_pred
-#         return alpha, beta, residuals
-    
-#     # Load S&P 500 returns first (needed for v_t calculation)
-#     spx_ret_series = None
-#     try:
-#         import yfinance as yf
-#         print("\nDownloading S&P 500 data for v_t calculation...")
-#         spx = yf.download('^GSPC', start='2000-01-01', end='2018-12-31', progress=False)
-#         if not spx is None and spx.empty:
-#             spx_weekly = spx['Close'].resample('W-TUE').last()
-#             spx_ret = spx_weekly.pct_change()
-#             spx_ret_series = spx_ret
-#             print("✓ S&P 500 returns downloaded")
-#         else:
-#             print("⚠ S&P 500 data empty")
-#     except Exception as e:
-#         print(f"⚠ Could not download SPX data: {str(e)[:50]}")
-    
-#     # Calculate v_t: annualized std of residuals from regression on S&P 500
-#     # Paper definition: "annualized standard deviation of the residuals from a 
-#     # regression of commodity futures returns on S&P500 returns (52-week rolling window)"
-#     print("\nCalculating v_t (idiosyncratic volatility)...")
-    
-#     for ticker in df['Ticker'].unique():
-#         mask = df['Ticker'] == ticker
-#         ticker_data = df.loc[mask].copy()
-        
-#         if spx_ret_series is not None:
-#             # Merge S&P 500 returns with commodity returns
-#             ticker_data = ticker_data.set_index('Report_Date')
-#             ticker_data['SPX_Ret'] = spx_ret_series
-#             ticker_data = ticker_data.reset_index()
-            
-#             # Filter rows with valid returns
-#             valid_mask = ticker_data['Ret'].notna() & ticker_data['SPX_Ret'].notna()
-            
-#             # Calculate rolling regression residuals
-#             v_t_values = []
-            
-#             for i in range(len(ticker_data)):
-#                 if not valid_mask.iloc[i]:
-#                     v_t_values.append(np.nan)
-#                 elif i < 25:  # Need at least 26 weeks
-#                     v_t_values.append(np.nan)
-#                 else:
-#                     # Get 52-week window (or available data)
-#                     window_start = max(0, i - 51)
-#                     window_data = ticker_data.iloc[window_start:i+1]
-#                     window_data = window_data[window_data['Ret'].notna() & window_data['SPX_Ret'].notna()]
-                    
-#                     if len(window_data) >= 26:  # Minimum 26 weeks
-#                         # Run regression: Ret_commodity = alpha + beta * Ret_SPX + residual
-#                         X = window_data['SPX_Ret'].values
-#                         y = window_data['Ret'].values
-                        
-#                         alpha, beta, residuals = simple_linear_regression(X, y)
-                        
-#                         # Annualized standard deviation of residuals
-#                         # Weekly std * sqrt(52) to annualize
-#                         v_t = np.std(residuals, ddof=1) * np.sqrt(52)
-#                         v_t_values.append(v_t)
-#                     else:
-#                         v_t_values.append(np.nan)
-            
-#             ticker_data['v_t'] = v_t_values
-            
-#             # Merge back to main dataframe by index
-#             df.loc[mask, 'v_t'] = ticker_data['v_t'].values
-#             df.loc[mask, 'SPX_Ret'] = ticker_data['SPX_Ret'].values
-#         else:
-#             # Fallback: use simple historical volatility if S&P 500 not available
-#             print(f"  ⚠ {ticker}: Using simple volatility (S&P 500 not available)")
-#             df.loc[mask, 'v_t'] = df.loc[mask, 'Ret'].rolling(52, min_periods=26).std() * np.sqrt(52)
-    
-#     print("✓ Calculated v_t (idiosyncratic volatility)")
-    
-#     # Calculate Basis and S*v_t for Table III
-#     for ticker in df['Ticker'].unique():
-#         mask = df['Ticker'] == ticker
-#         # Basis: simplified as return autocorrelation proxy (since we don't have multiple contract maturities)
-#         basis_raw = df.loc[mask, 'Ret'].rolling(4, min_periods=2).mean()
-#         # Apply log transformation to basis (handling negative values)
-#         df.loc[mask, 'Basis'] = np.log(basis_raw + 1)
-#         # S: sign variable for noncommercial net position
-#         df.loc[mask, 'S'] = np.where(df.loc[mask, 'NetLong_NonComm'] > 0, 1, -1)
-#         # S*v: signed idiosyncratic volatility
-#         df.loc[mask, 'S_v'] = df.loc[mask, 'S'] * df.loc[mask, 'v_t']
-#     print("✓ Calculated Basis and S*v_t")
-    
-#     # Load VIX
-#     if os.path.exists('data/VIX_data.csv'):
-#         try:
-#             vix = pd.read_csv('data/VIX_data.csv', index_col=0, parse_dates=True)
-#             vix_weekly = vix['Close'].resample('W-TUE').last()
-            
-#             # Merge with commodity data
-#             df['VIX'] = df['Report_Date'].map(vix_weekly.to_dict())
-#             print("✓ Added VIX data")
-#         except Exception as e:
-#             print(f"⚠ Could not load VIX data: {str(e)[:50]}")
-    
-#     return df
-
 def calculate_additional_variables(df):
     """Calculate additional variables needed for analysis (Complete & Optimized)"""
     print("\n" + "=" * 70)
     print("CALCULATING ADDITIONAL VARIABLES (COMPLETE)")
     print("=" * 70)
     
-    # 0. 基础预处理：确保日期格式和排序
     df['Report_Date'] = pd.to_datetime(df['Report_Date'])
     df = df.sort_values(['Ticker', 'Report_Date'])
     
-    # 1. 计算 |Q| (绝对值)
     df['abs_Q_Comm'] = df['Q_Comm'].abs()
     df['abs_Q_NonComm'] = df['Q_NonComm'].abs()
     print("✓ Calculated |Q| variables")
 
-    # -------------------------------------------------------------------------
-    # 2. 计算持仓变化和 Non-Reportable 变量 (向量化重写，替代原 for 循环)
-    # -------------------------------------------------------------------------
-    
-    # (A) 计算 Non-Reportable 的原始持仓 (直接列运算，不需要循环)
-    # NonReport = Total - Commercial - NonCommercial
     df['NonReport_Long'] = (df['Open_Interest_All'] 
                             - df['Comm_Positions_Long_All'] 
                             - df['NonComm_Positions_Long_All'])
@@ -235,35 +72,26 @@ def calculate_additional_variables(df):
     
     df['NetLong_NonReport'] = df['NonReport_Long'] - df['NonReport_Short']
 
-    # (B) 计算滞后项和差分 (使用 GroupBy 处理每个 Ticker)
     g = df.groupby('Ticker')
     
-    # OI_{t-1}
     df['Open_Interest_Lag1'] = g['Open_Interest_All'].shift(1)
     
-    # Delta NetLong (当前持仓 - 上周持仓)
     df['Delta_NetLong_Comm'] = g['NetLong_Comm'].diff()
     df['Delta_NetLong_NonComm'] = g['NetLong_NonComm'].diff()
     df['Delta_NetLong_NonReport'] = g['NetLong_NonReport'].diff()
     
-    # 计算 Q_NonReport = Delta / OI_{t-1} * 100
     df['Q_NonReport'] = (df['Delta_NetLong_NonReport'] / df['Open_Interest_Lag1']) * 100
     
-    # 滞后的 Q 值 (用于 Table II 等)
     df['Q_Comm_lag1'] = g['Q_Comm'].shift(1)
     df['Q_NonComm_lag1'] = g['Q_NonComm'].shift(1)
     df['Q_NonReport_lag1'] = g['Q_NonReport'].shift(1)
     
-    # 滞后的收益率
     df['Ret_lag1'] = g['Ret'].shift(1)
     df['Ret_lag2'] = g['Ret'].shift(2)
-    df['Ret_Lead2'] = g['Ret'].shift(-2) # 用于前瞻
+    df['Ret_Lead2'] = g['Ret'].shift(-2)
     
     print("✓ Calculated position changes & Non-Reportables (Vectorized)")
 
-    # -------------------------------------------------------------------------
-    # 3. 下载并合并 SPX 数据 (用于计算 v_t)
-    # -------------------------------------------------------------------------
     print("\nDownloading and Merging S&P 500 data...")
     try:
         spx = yf.download('^GSPC', start='1990-01-01', end='2020-12-31', progress=False)
@@ -274,14 +102,11 @@ def calculate_additional_variables(df):
             elif 'Close' in spx.columns:
                 spx = spx['Close']
                 
-            # 确保索引无时区
             spx.index = pd.to_datetime(spx.index).tz_localize(None)
             
-            # 重采样到周度
             spx_weekly = spx.resample('W-TUE').last().pct_change()
             spx_df = spx_weekly.to_frame(name='SPX_Ret').dropna().sort_index()
             
-            # merge_asof 模糊匹配日期
             df = pd.merge_asof(df, spx_df, left_on='Report_Date', right_index=True, 
                                tolerance=pd.Timedelta(days=7), direction='backward')
             print("✓ S&P 500 data merged successfully")
@@ -291,50 +116,31 @@ def calculate_additional_variables(df):
         print(f"⚠ SPX Download failed: {e}")
         df['SPX_Ret'] = np.nan
 
-    # -------------------------------------------------------------------------
-    # 4. 计算 v_t (Idiosyncratic Volatility)
-    # -------------------------------------------------------------------------
     print("\nCalculating v_t...")
     
     def calc_rolling_vt(sub_df):
-        # 如果没有 SPX 数据，退化为计算原始波动率
         if sub_df['SPX_Ret'].isnull().all():
             residuals = sub_df['Ret']
         else:
-            # 简化版：假设残差近似于收益率本身 (为了代码鲁棒性)
-            # 严谨复现需做 rolling OLS，但速度极慢且容易报错
             residuals = sub_df['Ret'] 
             
-        # 52周滚动标准差 * sqrt(52)
         vt = residuals.rolling(window=52, min_periods=20).std() * np.sqrt(52)
         return vt
 
-    # 分组计算 v_t
     df['v_t'] = df.groupby('Ticker', group_keys=False).apply(calc_rolling_vt)
-    
-    # 填充早期的 NaN (使用该品种的均值，防止回归时丢弃太多数据)
     df['v_t'] = df.groupby('Ticker')['v_t'].transform(lambda x: x.fillna(x.mean()))
     
-    # -------------------------------------------------------------------------
-    # 5. 计算 Basis 和 S*v_t
-    # -------------------------------------------------------------------------
-    # S: 符号变量
     df['S'] = np.where(df['NetLong_NonComm'] > 0, 1, -1)
     
-    # S * v_t
     df['S_v'] = df['S'] * df['v_t']
     
-    # Basis Proxy: 过去4周平均收益率
-    # # 注意：计算 rolling mean 后 reset_index 保持对齐
+    # Basis Proxy
     # rolling_ret = df.groupby('Ticker')['Ret'].rolling(4, min_periods=1).mean()
-    # # 恢复索引顺序以匹配 df
     # rolling_ret = rolling_ret.reset_index(level=0, drop=True)
     
-    # # 安全的 Log 计算
     # safe_basis_input = np.maximum(rolling_ret + 1, 0.001)
     # df['Basis'] = np.log(safe_basis_input)
     
-    # # 清理 Basis 的异常值
     # df['Basis'] = df['Basis'].fillna(0)
     
     print("✓ Calculated Basis and S*v_t")
@@ -414,65 +220,6 @@ def table_I_summary_statistics(df):
     
     return table
 
-# def generate_latex_panel_b_mixed(df):
-#     """
-#     根据当前数据生成 Table I Panel B 的 LaTeX 代码。
-#     针对当前数据的特殊状态：
-#     - |Q| 列已经是百分数 (e.g., 3.76)，直接显示。
-#     - PT  列是原始小数 (e.g., 0.056)，需要乘以 100 显示。
-#     """
-    
-#     # 格式化函数：保留2位小数
-#     def fmt_val(val):
-#         return "{:.2f}".format(val)
-    
-#     # 格式化函数：乘以100后保留2位小数
-#     def fmt_pct(val):
-#         return "{:.2f}".format(val * 100)
-
-#     # 确保 Average 行在最后处理
-#     df_body = df[df['Ticker'] != 'AVERAGE'].copy()
-    
-#     # 获取 Average 行的数据（如果df里有就取，没有就重算）
-#     if 'AVERAGE' in df['Ticker'].values:
-#         avg_row = df[df['Ticker'] == 'AVERAGE'].iloc[0]
-#     else:
-#         avg_row = df.mean(numeric_only=True)
-
-#     print("\n" + "%" * 60)
-#     print("% LaTeX Code for Panel B (Corrected for your specific data scaling)")
-#     print("%" * 60)
-#     print(r"\begin{tabular*}{\textwidth}{l@{\extracolsep{\fill}}rrrr}")
-#     print(r"\toprule")
-#     print(r"& \multicolumn{2}{c}{Net Trading ($|Q|$, \%)} & \multicolumn{2}{c}{Propensity to Trade ($PT$, \%)} \\")
-#     print(r"\cmidrule{2-3} \cmidrule{4-5}")
-#     print(r"Commodity & Commercials & Non-Comm. & Commercials & Non-Comm. \\")
-#     print(r"\midrule")
-
-#     # 遍历每一行
-#     for _, row in df_body.iterrows():
-#         line = (f"{row['Ticker']} & "
-#                 f"{fmt_val(row['|Q_Comm|_Mean'])} & "      # Q 已经是百分数，直接打印
-#                 f"{fmt_val(row['|Q_NonComm|_Mean'])} & "   # Q 已经是百分数，直接打印
-#                 f"{fmt_pct(row['PT_Comm_Mean'])} & "       # PT 是小数，乘以 100
-#                 f"{fmt_pct(row['PT_NonComm_Mean'])} \\\\") # PT 是小数，乘以 100
-#         print(line)
-
-#     print(r"\midrule")
-#     # 打印 Average 行
-#     line_avg = (r"\textbf{Average} & "
-#                 f"{fmt_val(avg_row['|Q_Comm|_Mean'])} & "    # Q 直接打印
-#                 f"{fmt_val(avg_row['|Q_NonComm|_Mean'])} & " # Q 直接打印
-#                 f"{fmt_pct(avg_row['PT_Comm_Mean'])} & "     # PT * 100
-#                 f"{fmt_pct(avg_row['PT_NonComm_Mean'])} \\\\") # PT * 100
-#     print(line_avg)
-    
-#     print(r"\bottomrule")
-#     print(r"\end{tabular*}")
-
-# 这里的 table 必须是你刚才展示给我的那个 DataFrame（即 Q~3.76, PT~0.05 的那个）
-# generate_latex_panel_b_mixed(table)
-
 # ============================================================================
 # Fama-MacBeth Regression Function
 # ============================================================================
@@ -534,67 +281,6 @@ def fama_macbeth_regression(df, dependent_var, independent_vars, date_col='Repor
     
     return results, avg_r2
 
-# ============================================================================
-# TABLE II: Weekly Position Changes and Returns
-# ============================================================================
-# def table_II_position_changes_returns(df):
-#     """Generate Table II: Weekly Position Changes and Returns
-#     Cross-sectional regressions with position changes as dependent variable
-#     - Regression 1-2: Commercial traders
-#     - Regression 3-4: Non-commercial traders
-#     - Regression 5-6: Non-reportable traders
-#     """
-#     print("\n" + "=" * 70)
-#     print("TABLE II: WEEKLY POSITION CHANGES AND RETURNS")
-#     print("=" * 70)
-    
-#     results = {}
-    
-#     # Regression 1: Q_Comm on Ret (contemporaneous)
-#     print("\nRegression 1: Q_Commercial ~ Ret_t")
-#     res1 = fama_macbeth_regression(df, 'Q_Comm', ['Ret'])
-#     print(res1.to_string(index=False))
-#     results['Reg1_Comm_Ret'] = res1
-    
-#     # Regression 2: Q_Comm on Ret_lag1 + Q_lag1
-#     print("\nRegression 2: Q_Commercial ~ Ret_{t-1} + Q_{t-1}")
-#     res2 = fama_macbeth_regression(df, 'Q_Comm', ['Ret_lag1', 'Q_Comm_lag1'])
-#     print(res2.to_string(index=False))
-#     results['Reg2_Comm_Lag'] = res2
-    
-#     # Regression 3: Q_NonComm on Ret (contemporaneous)
-#     print("\nRegression 3: Q_NonCommercial ~ Ret_t")
-#     res3 = fama_macbeth_regression(df, 'Q_NonComm', ['Ret'])
-#     print(res3.to_string(index=False))
-#     results['Reg3_NonComm_Ret'] = res3
-    
-#     # Regression 4: Q_NonComm on Ret_lag1 + Q_lag1
-#     print("\nRegression 4: Q_NonCommercial ~ Ret_{t-1} + Q_{t-1}")
-#     res4 = fama_macbeth_regression(df, 'Q_NonComm', ['Ret_lag1', 'Q_NonComm_lag1'])
-#     print(res4.to_string(index=False))
-#     results['Reg4_NonComm_Lag'] = res4
-    
-#     # Regression 5: Delta_NonReport on Ret (contemporaneous)
-#     print("\nRegression 5: Delta_NonReportable ~ Ret_t")
-#     res5 = fama_macbeth_regression(df, 'Delta_NetLong_NonReport', ['Ret'])
-#     print(res5.to_string(index=False))
-#     results['Reg5_NonReport_Ret'] = res5
-    
-#     # Regression 6: Delta_NonReport on Ret_lag1 (simplified, no Q for non-reportable)
-#     print("\nRegression 6: Delta_NonReportable ~ Ret_{t-1}")
-#     res6 = fama_macbeth_regression(df, 'Delta_NetLong_NonReport', ['Ret_lag1'])
-#     print(res6.to_string(index=False))
-#     results['Reg6_NonReport_Lag'] = res6
-    
-#     # Save
-#     with pd.ExcelWriter('output/tables/table_II_position_changes.xlsx') as writer:
-#         for name, res in results.items():
-#             res.to_excel(writer, sheet_name=name, index=False)
-    
-#     print("\n✓ Table II saved to output/tables/table_II_position_changes.xlsx")
-    
-#     return results
-
 def _format_coef_tstat(res_df, var_name):
     """res_df: results DataFrame from fama_macbeth_regression"""
     if var_name in res_df.index:
@@ -647,6 +333,11 @@ def table_II_position_changes_returns(df):
         if res1.empty or res2.empty:
             print(f"  ⚠ Skipping {trader_name} due to insufficient data.")
             continue
+
+        print("\n====== regression 1 ======\n")
+        print(res1.to_string(index=False))
+        print("\n====== regression 2 ======\n")
+        print(res2.to_string(index=False))
 
         col_data = {
             'R_i,t': _format_coef_tstat(res1, 'Ret'),
@@ -703,66 +394,31 @@ def table_III_return_predictability(df):
     
     # For j=1 (one week ahead)
     print("\n=== PREDICTIONS FOR R_{t+1} ===")
-    
-    # # Model 1: Commercial Q only
-    # print("\nModel 1a: R_{t+1} ~ Q_Comm")
-    # res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm'])
-    # print(res1a.to_string(index=False))
-    # results['R_t1_Q_Comm'] = res1a
-    
-    # # Model 2: Commercial Q with controls (Equation 5, with Basis)
-    # print("\nModel 1b: R_{t+1} ~ Q_Comm + Basis + S*v + Ret")
-    # res1b, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm', 'Basis', 'S_v', 'Ret'])
-    # print(res1b.to_string(index=False))
-    # results['R_t1_Q_Comm_Full'] = res1b
-    
-    # # Model 3: NonCommercial Q only
-    # print("\nModel 2a: R_{t+1} ~ Q_NonComm")
-    # res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm'])
-    # print(res2a.to_string(index=False))
-    # results['R_t1_Q_NonComm'] = res2a
-    
-    # # Model 4: NonCommercial Q with controls (Equation 5, with Basis)
-    # print("\nModel 2b: R_{t+1} ~ Q_NonComm + Basis + S*v + Ret")
-    # res2b, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm', 'Basis', 'S_v', 'Ret'])
-    # print(res2b.to_string(index=False))
-    # results['R_t1_Q_NonComm_Full'] = res2b
-    
-    # # For j=2 (two weeks ahead)
-    # print("\n=== PREDICTIONS FOR R_{t+2} ===")
-    
-    # # Model 5: Commercial Q with controls for R_{t+2} (with Basis)
-    # print("\nModel 3: R_{t+2} ~ Q_Comm + Basis + S*v + Ret")
-    # res3, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['Q_Comm', 'Basis', 'S_v', 'Ret'])
-    # print(res3.to_string(index=False))
-    # results['R_t2_Q_Comm_Full'] = res3
-    
-    # # Model 6: NonCommercial Q with controls for R_{t+2} (with Basis)
-    # print("\nModel 4: R_{t+2} ~ Q_NonComm + Basis + S*v + Ret")
-    # res4, _ = fama_macbeth_regression(df, 'Ret_Lead2', ['Q_NonComm', 'Basis', 'S_v', 'Ret'])
-    # print(res4.to_string(index=False))
-    # results['R_t2_Q_NonComm_Full'] = res4
 
     print("\n[Commercials] Univariate: R_{t+1} ~ Q_Comm")
-    res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm'])
+    res1a, r2_1a = fama_macbeth_regression(df, 'Ret_Lead', ['Q_Comm'])
     print(res1a.to_string(index=False))
+    print(f"Average R-squared: {r2_1a:.2%}")
     results['R_t1_Q_Comm'] = res1a
-    
+
     print(f"\n[Commercials] Multivariate: R_{{t+1}} ~ Q_Comm + {' + '.join(controls)}")
     cols = ['Q_Comm'] + controls
-    res1b, _ = fama_macbeth_regression(df, 'Ret_Lead', cols)
+    res1b, r2_1b = fama_macbeth_regression(df, 'Ret_Lead', cols)
     print(res1b.to_string(index=False))
+    print(f"Average R-squared: {r2_1b:.2%}")
     results['R_t1_Q_Comm_Full'] = res1b
 
     print("\n[Non-Commercials] Univariate: R_{t+1} ~ Q_NonComm")
-    res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm'])
+    res2a, r2_2a = fama_macbeth_regression(df, 'Ret_Lead', ['Q_NonComm'])
     print(res2a.to_string(index=False))
+    print(f"Average R-squared: {r2_2a:.2%}")
     results['R_t1_Q_NonComm'] = res2a
 
     print(f"\n[Non-Commercials] Multivariate: R_{{t+1}} ~ Q_NonComm + {' + '.join(controls)}")
     cols = ['Q_NonComm'] + controls
-    res2b, _ = fama_macbeth_regression(df, 'Ret_Lead', cols)
+    res2b, r2_2b = fama_macbeth_regression(df, 'Ret_Lead', cols)
     print(res2b.to_string(index=False))
+    print(f"Average R-squared: {r2_2b:.2%}")
     results['R_t1_Q_NonComm_Full'] = res2b
     
     # Save
@@ -971,24 +627,27 @@ def table_VI_smoothed_hp(df):
     # print("\nRegression 1a: R_{t+1} ~ HP + Basis + S*v + Ret")
     cols1 = ['HP'] + controls
     print(f"\nRegression 1a: R_{{t+1}} ~ {' + '.join(cols1)}")
-    res1a, _ = fama_macbeth_regression(df, 'Ret_Lead', cols1)
+    res1a, r2_vi_1a = fama_macbeth_regression(df, 'Ret_Lead', cols1)
     print(res1a.to_string(index=False))
+    print(f"Average R-squared: {r2_vi_1a:.2%}")
     results['R_t1_HP'] = res1a
     
     # Regression 2: HP_Smooth (with Basis)
     cols2 = ['HP_Smooth_52w'] + controls
     # print("\nRegression 2a: R_{t+1} ~ HP_Smooth + Basis + S*v + Ret")
     print(f"\nRegression 2a: R_{{t+1}} ~ {' + '.join(cols2)}")
-    res2a, _ = fama_macbeth_regression(df, 'Ret_Lead', cols2)
+    res2a, r2_vi_2a = fama_macbeth_regression(df, 'Ret_Lead', cols2)
     print(res2a.to_string(index=False))
+    print(f"Average R-squared: {r2_vi_2a:.2%}")
     results['R_t1_HP_Smooth'] = res2a
     
     # Regression 3: HP_Smooth + Q (with Basis)
     cols3 = ['HP_Smooth_52w', 'Q_Comm'] + controls
     # print("\nRegression 3a: R_{t+1} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
     print(f"\nRegression 3a: R_{{t+1}} ~ {' + '.join(cols3)}")
-    res3a, _ = fama_macbeth_regression(df, 'Ret_Lead', cols3)
+    res3a, r2_vi_3a = fama_macbeth_regression(df, 'Ret_Lead', cols3)
     print(res3a.to_string(index=False))
+    print(f"Average R-squared: {r2_vi_3a:.2%}")
     results['R_t1_HP_Smooth_Q'] = res3a
     
     # For j=2 (two weeks ahead)
@@ -997,22 +656,25 @@ def table_VI_smoothed_hp(df):
     # Regression 1: HP (not smoothed, with Basis)
     # print("\nRegression 1b: R_{t+2} ~ HP + Basis + S*v + Ret")
     print(f"\nRegression 1b: R_{{t+2}} ~ {' + '.join(cols1)}")
-    res1b, _ = fama_macbeth_regression(df, 'Ret_Lead2', cols1)
+    res1b, r2_vi_1b = fama_macbeth_regression(df, 'Ret_Lead2', cols1)
     print(res1b.to_string(index=False))
+    print(f"Average R-squared: {r2_vi_1b:.2%}")
     results['R_t2_HP'] = res1b
     
     # Regression 2: HP_Smooth (with Basis)
     # print("\nRegression 2b: R_{t+2} ~ HP_Smooth + Basis + S*v + Ret")
     print(f"\nRegression 2b: R_{{t+2}} ~ {' + '.join(cols2)}")
-    res2b, _ = fama_macbeth_regression(df, 'Ret_Lead2', cols2)
+    res2b, r2_vi_2b = fama_macbeth_regression(df, 'Ret_Lead2', cols2)
     print(res2b.to_string(index=False))
+    print(f"Average R-squared: {r2_vi_2b:.2%}")
     results['R_t2_HP_Smooth'] = res2b
     
     # Regression 3: HP_Smooth + Q (with Basis)
     # print("\nRegression 3b: R_{t+2} ~ HP_Smooth + Q_Comm + Basis + S*v + Ret")
     print(f"\nRegression 3b: R_{{t+2}} ~ {' + '.join(cols3)}")
-    res3b, _ = fama_macbeth_regression(df, 'Ret_Lead2', cols3)
+    res3b, r2_vi_3b = fama_macbeth_regression(df, 'Ret_Lead2', cols3)
     print(res3b.to_string(index=False))
+    print(f"Average R-squared: {r2_vi_3b:.2%}")
     results['R_t2_HP_Smooth_Q'] = res3b
     
     # Save
@@ -1200,7 +862,6 @@ if __name__ == "__main__":
     
     # Generate tables
     table_I = table_I_summary_statistics(df)
-    # generate_latex_panel_b_mixed(table_I)
     table_II = table_II_position_changes_returns(df)
     table_III = table_III_return_predictability(df)
     table_IV = table_IV_dcot_analysis(df)
