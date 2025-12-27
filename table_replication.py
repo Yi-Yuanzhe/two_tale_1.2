@@ -272,7 +272,7 @@ def fama_macbeth_regression(df, dependent_var, independent_vars, date_col='Repor
         'Coefficient': coeffs_df.mean(),
         'Std_Error': coeffs_df.std() / np.sqrt(len(coeffs_df)),
         't_stat': coeffs_df.mean() / (coeffs_df.std() / np.sqrt(len(coeffs_df))),
-        'N_months': len(coeffs_df)
+        'N_weeks': len(coeffs_df)
     })
     
     results['p_value'] = 2 * (1 - stats.t.cdf(np.abs(results['t_stat']), len(coeffs_df) - 1))
